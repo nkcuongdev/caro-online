@@ -45,6 +45,13 @@ services:
         value: "30"
       - key: AUTH_ATTEMPTS_PER_10_MIN
         value: "20"
+      # Optional test login that owns every achievement, title, name style and avatar frame.
+      # Seeded at every boot, so each deploy also gives it whatever the catalogues gained.
+      # Leave blank for no test account; use a strong password, the site is public.
+      - key: TEST_ACCOUNT_EMAIL
+        sync: false
+      - key: TEST_ACCOUNT_PASSWORD
+        sync: false
 
       # --- Avatars ---
       # cloudinary://<api_key>:<api_secret>@<cloud_name>, the same value as in server/.env.

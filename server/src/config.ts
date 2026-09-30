@@ -1,3 +1,5 @@
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from './accounts/password.js';
+import type { TestAccountConfig } from './accounts/testAccount.js';
 import type { BoardSize } from './types.js';
 
 export interface AppConfig {
@@ -59,6 +61,11 @@ export interface AccountsConfig {
   authWindowMs: number;
   /** Failed logins allowed per email per window before that email is paused. */
   failuresPerEmail: number;
+  /**
+   * TEST_ACCOUNT_EMAIL + TEST_ACCOUNT_PASSWORD: a login that owns every achievement, title,
+   * name style and avatar frame, (re)seeded at every boot. Unset: no test account.
+   */
+  testAccount: TestAccountConfig | null;
 }
 
 export interface TournamentConfig {
@@ -124,6 +131,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       authBurst: positive(env.AUTH_ATTEMPTS_PER_10_MIN, 20),
       authWindowMs: 10 * 60_000,
       failuresPerEmail: 8,
+      testAccount: loadTestAccount(env),
     },
     tournament: {
       readyCheckMs: positive(env.TOURNAMENT_READY_SECONDS, 30) * 1000,
@@ -175,6 +183,17 @@ function loadMetered(env: NodeJS.ProcessEnv): VoiceConfig['metered'] {
     console.warn('[caro] METERED_SECRET_KEY looks like a Realtime Messaging key, not a TURN secret key; TURN will be rejected');
   }
   return { domain, secretKey, apiKey };
+}
+
+function loadTestAccount(env: NodeJS.ProcessEnv): TestAccountConfig | null {
+  const email = env.TEST_ACCOUNT_EMAIL?.trim();
+  const password = env.TEST_ACCOUNT_PASSWORD;
+  if (!email || !password) return null;
+  if (!email.includes('@') || password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
+    console.warn(`[caro] TEST_ACCOUNT_EMAIL / TEST_ACCOUNT_PASSWORD ignored: needs an email and a ${PASSWORD_MIN_LENGTH}–${PASSWORD_MAX_LENGTH} character password`);
+    return null;
+  }
+  return { email, password, nickname: env.TEST_ACCOUNT_NICKNAME?.trim() || 'Full Unlock', startingCoins: 100_000 };
 }
 
 function loadJwtSecret(env: NodeJS.ProcessEnv): string | null {
