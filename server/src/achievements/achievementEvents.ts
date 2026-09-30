@@ -23,11 +23,11 @@ export interface AchievementUnlockedEvent {
  * Unlocks that happen over HTTP instead (games claimed at sign-up, backfill of
  * old history) are returned in those responses, so each unlock is reported once.
  */
-export function registerAchievementHooks(io: Server, recorder: MatchRecorder, achievements: AchievementManager, coinsOf: (userId: string) => number) {
-  recorder.onMatchRecorded((userId) => {
-    const { unlocked, restoredTitles } = achievements.evaluate(userId);
+export function registerAchievementHooks(io: Server, recorder: MatchRecorder, achievements: AchievementManager, coinsOf: (userId: string) => Promise<number>) {
+  recorder.onMatchRecorded(async (userId) => {
+    const { unlocked, restoredTitles } = await achievements.evaluate(userId);
     if (!unlocked.length && !restoredTitles.length) return;
-    const event: AchievementUnlockedEvent = { achievements: unlocked, restoredTitles, coins: coinsOf(userId) };
+    const event: AchievementUnlockedEvent = { achievements: unlocked, restoredTitles, coins: await coinsOf(userId) };
     io.to(userChannel(userId)).emit('achievement:unlocked', event);
   });
 }

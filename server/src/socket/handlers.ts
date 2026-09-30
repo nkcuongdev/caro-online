@@ -20,6 +20,12 @@ interface SessionData {
   role?: 'player' | 'spectator';
   /** Account this socket is signed in as (handshake `auth.token`, then `auth:identify`). Unset = guest. */
   userId?: string | null;
+  /**
+   * Settles once the handshake token has been checked (a database read). Events
+   * wait for it, so a signed-in player's first move is never taken as a guest's.
+   * The tournament handlers wait on it too.
+   */
+  identified?: Promise<void>;
 }
 
 /** Unset fields fall back to the server defaults. */
@@ -53,9 +59,9 @@ export function registerSocketHandlers(
     /** Unknown or foreign avatars are dropped (null): the client then shows a default. */
     const avatarOf = (raw: string | undefined) => normalizeAvatar(raw, avatars);
     /** Guests (no token, or a stale one) play exactly as before. */
-    const identify = (token: unknown) => {
+    const identify = async (token: unknown) => {
       try {
-        return auth?.identify(token)?.userId ?? null;
+        return (await auth?.identify(token))?.userId ?? null;
       } catch (err) {
         console.error('[socket] identify failed', err);
         return null;
@@ -67,7 +73,10 @@ export function registerSocketHandlers(
       if (userId) socket.join(userChannel(userId));
       session.userId = userId;
     };
-    setIdentity(identify((socket.handshake.auth as { token?: unknown } | undefined)?.token));
+    session.identified = identify((socket.handshake.auth as { token?: unknown } | undefined)?.token).then((userId) => {
+      // A socket that disconnected meanwhile has nothing to join.
+      if (socket.connected) setIdentity(userId);
+    });
     const me = () => session.userId ?? null;
 
     function handle<S extends z.ZodType>(
@@ -85,6 +94,7 @@ export function registerSocketHandlers(
         const parsed = schema.safeParse(raw ?? {});
         if (!parsed.success) return reply(fail('INVALID_PAYLOAD'));
         try {
+          await session.identified;
           const result = await fn(parsed.data);
           reply({ ok: true, ...(result ?? {}) });
         } catch (err) {
@@ -213,7 +223,7 @@ export function registerSocketHandlers(
      * game in progress is recorded for the new account.
      */
     handle('auth:identify', schemas.identify, async ({ token }) => {
-      const userId = token ? identify(token) : null;
+      const userId = token ? await identify(token) : null;
       if (token && !userId) throw new GameError('AUTH_INVALID');
       const changed = (session.userId ?? null) !== userId;
       setIdentity(userId);

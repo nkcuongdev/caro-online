@@ -119,15 +119,18 @@ export function toPublicReward(
 export class RewardService {
   constructor(private readonly store: AccountStore) {}
 
-  grantAll(userId: string, rewards: readonly Reward[] | undefined, source: RewardSource): GrantResult[] {
-    return (rewards ?? []).map((r) => this.grant(userId, r, source));
+  /** In order, one at a time: inside a transaction the grants share one connection. */
+  async grantAll(userId: string, rewards: readonly Reward[] | undefined, source: RewardSource): Promise<GrantResult[]> {
+    const results: GrantResult[] = [];
+    for (const r of rewards ?? []) results.push(await this.grant(userId, r, source));
+    return results;
   }
 
-  grant(userId: string, reward: Reward, source: RewardSource): GrantResult {
+  async grant(userId: string, reward: Reward, source: RewardSource): Promise<GrantResult> {
     switch (reward.type) {
       case 'coins': {
         const amount = Math.max(0, Math.floor(reward.amount));
-        if (amount > 0) this.store.addCoins(userId, amount);
+        if (amount > 0) await this.store.addCoins(userId, amount);
         return { reward, granted: amount > 0 };
       }
       case 'title': {
@@ -136,21 +139,21 @@ export class RewardService {
           console.warn(`[rewards] unknown title "${reward.titleId}" from ${source.type}:${source.id}`);
           return { reward, granted: false };
         }
-        return { reward, granted: this.store.grantTitle(userId, reward.titleId, source) };
+        return { reward, granted: await this.store.grantTitle(userId, reward.titleId, source) };
       }
       case 'nameStyle': {
         if (!getNameStyle(reward.nameStyleId)) {
           console.warn(`[rewards] unknown name style "${reward.nameStyleId}" from ${source.type}:${source.id}`);
           return { reward, granted: false };
         }
-        return { reward, granted: this.store.grantCosmetic(userId, 'name_style', reward.nameStyleId, source) };
+        return { reward, granted: await this.store.grantCosmetic(userId, 'name_style', reward.nameStyleId, source) };
       }
       case 'avatarFrame': {
         if (!getAvatarFrame(reward.avatarFrameId)) {
           console.warn(`[rewards] unknown avatar frame "${reward.avatarFrameId}" from ${source.type}:${source.id}`);
           return { reward, granted: false };
         }
-        return { reward, granted: this.store.grantCosmetic(userId, 'avatar_frame', reward.avatarFrameId, source) };
+        return { reward, granted: await this.store.grantCosmetic(userId, 'avatar_frame', reward.avatarFrameId, source) };
       }
       default: {
         const unknown: never = reward;
@@ -160,16 +163,16 @@ export class RewardService {
   }
 
   /** Ownable rewards from `rewards` the player doesn't have yet (for backfilling sources completed before the reward existed). */
-  missing(userId: string, rewards: readonly Reward[]): OwnableReward[] {
+  async missing(userId: string, rewards: readonly Reward[]): Promise<OwnableReward[]> {
     const ownable = rewards.filter(isOwnable);
     if (!ownable.length) return [];
     // Only read the inventories this batch can touch.
-    const titles = ownable.some((r) => r.type === 'title') ? new Set(this.store.listTitles(userId).map((t) => t.titleId)) : new Set<string>();
+    const titles = ownable.some((r) => r.type === 'title') ? new Set((await this.store.listTitles(userId)).map((t) => t.titleId)) : new Set<string>();
     const styles = ownable.some((r) => r.type === 'nameStyle')
-      ? new Set(this.store.listCosmetics(userId, 'name_style').map((c) => c.itemId))
+      ? new Set((await this.store.listCosmetics(userId, 'name_style')).map((c) => c.itemId))
       : new Set<string>();
     const frames = ownable.some((r) => r.type === 'avatarFrame')
-      ? new Set(this.store.listCosmetics(userId, 'avatar_frame').map((c) => c.itemId))
+      ? new Set((await this.store.listCosmetics(userId, 'avatar_frame')).map((c) => c.itemId))
       : new Set<string>();
     const seen = new Set<string>();
     return ownable.filter((r) => {

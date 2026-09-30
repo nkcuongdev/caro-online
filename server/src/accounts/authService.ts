@@ -49,6 +49,7 @@ export const normalizeEmail = (email: string) => email.trim().toLowerCase();
  */
 export class AuthService {
   private secret: string | null;
+  private readonly identifiedListeners: ((userId: string) => void | Promise<void>)[] = [];
 
   constructor(
     readonly store: AccountStore,
@@ -57,49 +58,66 @@ export class AuthService {
     this.secret = cfg.jwtSecret;
   }
 
-  private key() {
+  private async key() {
     // No JWT_SECRET: a random key generated once and kept in the database, so restarts don't sign everyone out.
-    return (this.secret ??= this.store.persistentSecret('jwt_secret'));
+    return (this.secret ??= await this.store.persistentSecret('jwt_secret'));
   }
 
-  private issue(user: UserRow, userAgent: string | null): string {
-    const session = this.store.createSession(user.id, this.cfg.sessionTtlMs, userAgent);
-    return signToken({ sub: user.id, sid: session.id }, this.key(), this.cfg.sessionTtlMs);
+  private async issue(user: UserRow, userAgent: string | null): Promise<string> {
+    const session = await this.store.createSession(user.id, this.cfg.sessionTtlMs, userAgent);
+    return signToken({ sub: user.id, sid: session.id }, await this.key(), this.cfg.sessionTtlMs);
   }
 
   async register(input: { email: string; password: string; nickname: string; avatar: string | null }, userAgent: string | null): Promise<AuthOutcome> {
     const email = normalizeEmail(input.email);
-    if (this.store.findUserByEmail(email)) return { ok: false, error: 'EMAIL_TAKEN' };
+    if (await this.store.findUserByEmail(email)) return { ok: false, error: 'EMAIL_TAKEN' };
     const passwordHash = await hashPassword(input.password);
     // Re-checked by the UNIQUE constraint, in case two sign-ups race.
-    const user = this.store.createUser({ email, passwordHash, nickname: input.nickname, avatar: input.avatar });
+    const user = await this.store.createUser({ email, passwordHash, nickname: input.nickname, avatar: input.avatar });
     if (!user) return { ok: false, error: 'EMAIL_TAKEN' };
-    return { ok: true, token: this.issue(user, userAgent), user };
+    return { ok: true, token: await this.issue(user, userAgent), user };
   }
 
   async login(emailRaw: string, password: string, userAgent: string | null): Promise<AuthOutcome> {
-    const user = this.store.findUserByEmail(normalizeEmail(emailRaw));
+    const user = await this.store.findUserByEmail(normalizeEmail(emailRaw));
     if (!user) {
       await burnPasswordCheck(password);
       return { ok: false, error: 'BAD_CREDENTIALS' };
     }
     if (!(await verifyPassword(password, user.passwordHash))) return { ok: false, error: 'BAD_CREDENTIALS' };
-    if (needsRehash(user.passwordHash)) this.store.setPasswordHash(user.id, await hashPassword(password));
-    this.store.touchLogin(user.id);
-    return { ok: true, token: this.issue(user, userAgent), user };
+    if (needsRehash(user.passwordHash)) await this.store.setPasswordHash(user.id, await hashPassword(password));
+    await this.store.touchLogin(user.id);
+    return { ok: true, token: await this.issue(user, userAgent), user };
   }
 
   /** Resolves a bearer token to a live session, or null (expired, revoked, tampered, or the user is gone). */
-  identify(token: unknown): Identity | null {
+  async identify(token: unknown): Promise<Identity | null> {
     if (typeof token !== 'string' || !token) return null;
-    const claims = verifyToken(token, this.key());
+    const claims = verifyToken(token, await this.key());
     if (!claims) return null;
-    const session = this.store.getSession(claims.sid);
+    const session = await this.store.getSession(claims.sid);
     if (!session || session.userId !== claims.sub) return null;
+    await Promise.all(
+      this.identifiedListeners.map(async (listener) => {
+        try {
+          await listener(claims.sub);
+        } catch (err) {
+          console.error('[auth] identified listener failed', err);
+        }
+      }),
+    );
     return { userId: claims.sub, sessionId: session.id };
   }
 
-  logout(identity: Identity) {
-    this.store.deleteSession(identity.sessionId);
+  /**
+   * Called (and awaited) whenever a token resolves to an account: app.ts warms
+   * its cosmetics cache here, so a seat taken right after signing in is dressed.
+   */
+  onIdentified(listener: (userId: string) => void | Promise<void>) {
+    this.identifiedListeners.push(listener);
+  }
+
+  async logout(identity: Identity) {
+    await this.store.deleteSession(identity.sessionId);
   }
 }

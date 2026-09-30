@@ -87,11 +87,11 @@ export class TitleService {
   }
 
   /** Every title with the player's ownership. Runs an achievement check first, so old completions are backfilled. */
-  collection(userId: string): TitleCollection {
-    const overview = this.achievements.overview(userId);
+  async collection(userId: string): Promise<TitleCollection> {
+    const overview = await this.achievements.overview(userId);
     const views = new Map<string, AchievementView>(overview.achievements.map((a) => [a.id, a]));
-    const owned = new Map(this.store.listTitles(userId).map((t) => [t.titleId, t.unlockedAt]));
-    const equippedTitleId = this.equippedTitleId(userId);
+    const owned = new Map((await this.store.listTitles(userId)).map((t) => [t.titleId, t.unlockedAt]));
+    const equippedTitleId = await this.equippedTitleId(userId);
 
     const titles = this.catalogue.map((t, i): TitleView => {
       const has = owned.has(t.id);
@@ -123,13 +123,13 @@ export class TitleService {
   }
 
   /** The stored equipped title, if it still exists in the catalogue. */
-  equippedTitleId(userId: string): string | null {
-    const id = this.store.equippedTitleId(userId);
+  async equippedTitleId(userId: string): Promise<string | null> {
+    const id = await this.store.equippedTitleId(userId);
     return getTitle(id) ? id : null;
   }
 
-  equippedTitle(userId: string): PublicTitle | null {
-    const t = getTitle(this.equippedTitleId(userId));
+  async equippedTitle(userId: string): Promise<PublicTitle | null> {
+    const t = getTitle(await this.equippedTitleId(userId));
     return t ? toPublicTitle(t) : null;
   }
 
@@ -138,13 +138,13 @@ export class TitleService {
    * the id must exist in the catalogue and the ownership check happens in the
    * database write itself.
    */
-  equip(userId: string, titleId: string | null): EquipOutcome {
+  async equip(userId: string, titleId: string | null): Promise<EquipOutcome> {
     if (titleId !== null && !isTitleId(titleId)) return { ok: false, error: 'TITLE_NOT_FOUND' };
-    let done = this.store.setEquippedTitle(userId, titleId);
+    let done = await this.store.setEquippedTitle(userId, titleId);
     if (!done && titleId !== null) {
       // Maybe the title is due from an achievement completed before titles existed: backfill, then retry.
-      this.achievements.evaluate(userId);
-      done = this.store.setEquippedTitle(userId, titleId);
+      await this.achievements.evaluate(userId);
+      done = await this.store.setEquippedTitle(userId, titleId);
     }
     if (!done) return { ok: false, error: 'TITLE_LOCKED' };
     for (const listener of this.listeners) {

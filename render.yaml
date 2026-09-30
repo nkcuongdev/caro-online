@@ -1,5 +1,5 @@
 # Render Blueprint: the whole app on Render as two services.
-#   caro-online-server  Node web service (Socket.IO + REST + SQLite accounts), Singapore, free
+#   caro-online-server  Node web service (Socket.IO + REST), Singapore, free; accounts in Turso
 #   caro-online         static site (client/dist on Render's CDN, free, never sleeps)
 # They stay separate so a frontend deploy never restarts the game server (rooms live in memory).
 #
@@ -12,21 +12,18 @@ services:
     runtime: node
     rootDir: server
     region: singapore
-    # Free plan (demo): the service sleeps after ~15 idle minutes and its filesystem is wiped
-    # on every sleep and deploy, so live rooms AND the SQLite accounts/history are lost.
-    # For real players switch to starter, add the disk below and point DATABASE_PATH and
-    # AVATAR_UPLOAD_DIR at it:
-    #   disk: { name: caro-data, mountPath: /var/data, sizeGB: 1 }
-    #   DATABASE_PATH=/var/data/caro.db   AVATAR_UPLOAD_DIR=/var/data/avatars
+    # Free plan: the service sleeps after ~15 idle minutes and its filesystem is wiped on every
+    # sleep and deploy, so live rooms are lost then. Accounts, history, achievements and
+    # cosmetics live in Turso (DATABASE_URL below), so they survive.
     plan: free
-    numInstances: 1 # rooms, timers and the SQLite file assume a single instance
+    numInstances: 1 # rooms and timers live in memory, so a single instance
     buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /health
     envVars:
       # PORT is injected by Render; don't set it.
       - key: NODE_VERSION
-        value: "22" # >= 22.13 for node:sqlite
+        value: "22"
 
       # --- CORS ---
       # Origins allowed to connect (comma-separated, `*` wildcards): the caro-online static
@@ -34,9 +31,14 @@ services:
       - key: CLIENT_ORIGIN
         value: https://caro-online-phju.onrender.com
 
-      # --- Accounts (SQLite; ephemeral on the free plan, see above) ---
-      - key: DATABASE_PATH
-        value: data/caro.db
+      # --- Accounts (Turso, a hosted SQLite) ---
+      # DATABASE_URL: libsql://<database>-<org>.turso.io   DATABASE_AUTH_TOKEN: a token for it.
+      # Both from the Turso dashboard. Without DATABASE_URL the server falls back to the local
+      # file DATABASE_PATH (data/caro.db), which the free plan wipes.
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_AUTH_TOKEN
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       - key: AUTH_SESSION_DAYS

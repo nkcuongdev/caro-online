@@ -62,7 +62,7 @@ export function registerTournamentHandlers(
   io.on('connection', (socket: Socket) => {
     const allow = createRateLimiter(15, 1000);
     // `userId` is the socket's login, kept up to date by the room handlers (socket/handlers.ts).
-    const data = socket.data as { tournament?: TournamentSession; userId?: string | null };
+    const data = socket.data as { tournament?: TournamentSession; userId?: string | null; identified?: Promise<void> };
     const avatarOf = (raw: string | undefined) => normalizeAvatar(raw, avatars);
     const account = (): ParticipantAccount => {
       const userId = data.userId ?? null;
@@ -76,6 +76,8 @@ export function registerTournamentHandlers(
         const parsed = schema.safeParse(raw ?? {});
         if (!parsed.success) return reply(fail('INVALID_PAYLOAD'));
         try {
+          // The room handlers resolve the handshake login first (socket/handlers.ts).
+          await data.identified;
           reply({ ok: true, ...((await fn(parsed.data)) ?? {}) });
         } catch (err) {
           if (err instanceof GameError) return reply(fail(err.code, err.message));

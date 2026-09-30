@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, it } from 'node:test';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { io as connectClient, type Socket } from 'socket.io-client';
 import { AccountStore, type MatchRecord, type MatchResult } from '../src/accounts/accountStore.js';
 import { AchievementManager } from '../src/achievements/achievementManager.js';
@@ -75,155 +77,157 @@ describe('achievement → reward → title', () => {
   let titles: TitleService;
   let userId: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store = new AccountStore(':memory:');
     achievements = new AchievementManager(store);
     titles = new TitleService(store, achievements);
-    userId = store.createUser({ email: 't@example.com', passwordHash: 'x', nickname: 'T', avatar: null })!.id;
+    userId = (await store.createUser({ email: 't@example.com', passwordHash: 'x', nickname: 'T', avatar: null }))!.id;
   });
-  afterEach(() => store.close());
+  afterEach(async () => {
+    await store.close();
+  });
 
-  const owned = () => store.listTitles(userId).map((t) => t.titleId).sort();
-  const play = (...records: MatchRecord[]) => {
-    for (const r of records) store.recordMatch(userId, r);
+  const owned = async () => (await store.listTitles(userId)).map((t) => t.titleId).sort();
+  const play = async (...records: MatchRecord[]) => {
+    for (const r of records) await store.recordMatch(userId, r);
     return achievements.evaluate(userId);
   };
 
-  it('no completed achievement, no title', () => {
-    assert.deepEqual(achievements.evaluate(userId).unlocked, []);
-    assert.deepEqual(owned(), []);
-    const c = titles.collection(userId);
+  it('no completed achievement, no title', async () => {
+    assert.deepEqual((await achievements.evaluate(userId)).unlocked, []);
+    assert.deepEqual(await owned(), []);
+    const c = await titles.collection(userId);
     assert.equal(c.summary.owned, 0);
     assert.equal(c.equippedTitleId, null);
     assert.ok(c.titles.every((t) => !t.owned && !t.equipped));
   });
 
-  it('completing an achievement grants its title and coins together, and reports both', () => {
-    const { unlocked } = play(game('loss'));
+  it('completing an achievement grants its title and coins together, and reports both', async () => {
+    const { unlocked } = await play(game('loss'));
     assert.deepEqual(unlocked.map((a) => a.id), ['games-1']);
     assert.deepEqual(unlocked[0].rewards, [
       { type: 'coins', amount: 20 },
       { type: 'title', title: { id: 'tan-binh', name: 'Tân Binh', description: TITLES['tan-binh'].description, icon: '🌱', rarity: 'common', effect: 'none' } },
     ]);
-    assert.deepEqual(owned(), ['tan-binh']);
-    assert.equal(store.coins(userId), 20);
-    const row = store.listTitles(userId)[0];
+    assert.deepEqual(await owned(), ['tan-binh']);
+    assert.equal(await store.coins(userId), 20);
+    const row = (await store.listTitles(userId))[0];
     assert.equal(row.sourceType, 'achievement');
     assert.equal(row.sourceId, 'games-1');
   });
 
-  it('processing the same result again never duplicates a title or coins', () => {
+  it('processing the same result again never duplicates a title or coins', async () => {
     const g = game('win');
-    play(g);
-    const before = { titles: owned(), coins: store.coins(userId) };
-    play(g); // the same game recorded twice
-    achievements.evaluate(userId);
-    achievements.evaluate(userId);
-    assert.deepEqual(owned(), before.titles);
-    assert.equal(store.coins(userId), before.coins);
+    await play(g);
+    const before = { titles: await owned(), coins: await store.coins(userId) };
+    await play(g); // the same game recorded twice
+    await achievements.evaluate(userId);
+    await achievements.evaluate(userId);
+    assert.deepEqual(await owned(), before.titles);
+    assert.equal(await store.coins(userId), before.coins);
     // Even a direct second grant is a no-op in the database.
-    assert.equal(store.grantTitle(userId, 'tan-binh', { type: 'achievement', id: 'games-1' }), false);
-    assert.equal(store.listTitles(userId).filter((t) => t.titleId === 'tan-binh').length, 1);
+    assert.equal(await store.grantTitle(userId, 'tan-binh', { type: 'achievement', id: 'games-1' }), false);
+    assert.equal((await store.listTitles(userId)).filter((t) => t.titleId === 'tan-binh').length, 1);
   });
 
-  it('an achievement with several rewards grants all of them; one without a title grants none', () => {
+  it('an achievement with several rewards grants all of them; one without a title grants none', async () => {
     const custom: AchievementDefinition[] = [
       { id: 'multi', name: 'm', description: 'm', icon: 'x', category: 'special', rarity: 'epic', stat: 'gamesPlayed', target: 1, rewards: [coins(10), title('bat-bai'), title('cao-thu'), coins(5)] },
       { id: 'plain', name: 'p', description: 'p', icon: 'x', category: 'special', rarity: 'common', stat: 'gamesPlayed', target: 1, rewards: [coins(7)] },
       { id: 'none', name: 'n', description: 'n', icon: 'x', category: 'special', rarity: 'common', stat: 'gamesPlayed', target: 1 },
     ];
     const manager = new AchievementManager(store, custom);
-    store.recordMatch(userId, game('win'));
-    const { unlocked } = manager.evaluate(userId);
+    await store.recordMatch(userId, game('win'));
+    const { unlocked } = await manager.evaluate(userId);
     assert.deepEqual(unlocked.map((a) => a.id), ['multi', 'plain', 'none']);
-    assert.deepEqual(owned(), ['bat-bai', 'cao-thu']);
-    assert.equal(store.coins(userId), 22);
+    assert.deepEqual(await owned(), ['bat-bai', 'cao-thu']);
+    assert.equal(await store.coins(userId), 22);
     assert.deepEqual(unlocked[2].rewards, []);
   });
 
-  it('an unknown title id in a reward is skipped, never stored', () => {
+  it('an unknown title id in a reward is skipped, never stored', async () => {
     const rewards = new RewardService(store);
-    const res = rewards.grant(userId, { type: 'title', titleId: 'not-a-title' as never }, { type: 'achievement', id: 'x' });
+    const res = await rewards.grant(userId, { type: 'title', titleId: 'not-a-title' as never }, { type: 'achievement', id: 'x' });
     assert.equal(res.granted, false);
-    assert.deepEqual(owned(), []);
+    assert.deepEqual(await owned(), []);
   });
 
-  it('equip: only owned titles; switching replaces; unequip clears', () => {
-    assert.deepEqual(titles.equip(userId, 'tan-binh'), { ok: false, error: 'TITLE_LOCKED' });
-    assert.deepEqual(titles.equip(userId, 'made-up'), { ok: false, error: 'TITLE_NOT_FOUND' });
-    assert.deepEqual(titles.equip(userId, '__proto__'), { ok: false, error: 'TITLE_NOT_FOUND' });
-    assert.equal(store.equippedTitleId(userId), null);
+  it('equip: only owned titles; switching replaces; unequip clears', async () => {
+    assert.deepEqual(await titles.equip(userId, 'tan-binh'), { ok: false, error: 'TITLE_LOCKED' });
+    assert.deepEqual(await titles.equip(userId, 'made-up'), { ok: false, error: 'TITLE_NOT_FOUND' });
+    assert.deepEqual(await titles.equip(userId, '__proto__'), { ok: false, error: 'TITLE_NOT_FOUND' });
+    assert.equal(await store.equippedTitleId(userId), null);
 
-    for (let i = 0; i < 3; i++) store.recordMatch(userId, game('win'));
-    achievements.evaluate(userId);
-    assert.deepEqual(owned(), ['phong-do-cao', 'tan-binh']);
+    for (let i = 0; i < 3; i++) await store.recordMatch(userId, game('win'));
+    await achievements.evaluate(userId);
+    assert.deepEqual(await owned(), ['phong-do-cao', 'tan-binh']);
 
-    const a = titles.equip(userId, 'tan-binh');
+    const a = await titles.equip(userId, 'tan-binh');
     assert.equal(a.ok && a.title?.name, 'Tân Binh');
-    assert.equal(store.equippedTitleId(userId), 'tan-binh');
-    titles.equip(userId, 'phong-do-cao');
-    assert.equal(store.equippedTitleId(userId), 'phong-do-cao');
-    const view = titles.collection(userId).titles;
+    assert.equal(await store.equippedTitleId(userId), 'tan-binh');
+    await titles.equip(userId, 'phong-do-cao');
+    assert.equal(await store.equippedTitleId(userId), 'phong-do-cao');
+    const view = (await titles.collection(userId)).titles;
     assert.deepEqual(view.filter((t) => t.equipped).map((t) => t.key), ['phong-do-cao'], 'only one at a time');
     // Still can't equip one they don't own, and a failed attempt keeps the current one.
-    assert.equal(titles.equip(userId, 'huyen-thoai').ok, false);
-    assert.equal(store.equippedTitleId(userId), 'phong-do-cao');
-    assert.deepEqual(titles.equip(userId, null), { ok: true, titleId: null, title: null });
-    assert.equal(store.equippedTitleId(userId), null);
+    assert.equal((await titles.equip(userId, 'huyen-thoai')).ok, false);
+    assert.equal(await store.equippedTitleId(userId), 'phong-do-cao');
+    assert.deepEqual(await titles.equip(userId, null), { ok: true, titleId: null, title: null });
+    assert.equal(await store.equippedTitleId(userId), null);
   });
 
-  it('notifies equip listeners (the realtime hook) only on success', () => {
+  it('notifies equip listeners (the realtime hook) only on success', async () => {
     const seen: (string | null)[] = [];
     titles.onEquipped((_u, id) => seen.push(id));
-    titles.equip(userId, 'tan-binh');
-    play(game('loss'));
-    titles.equip(userId, 'tan-binh');
-    titles.equip(userId, null);
+    await titles.equip(userId, 'tan-binh');
+    await play(game('loss'));
+    await titles.equip(userId, 'tan-binh');
+    await titles.equip(userId, null);
     assert.deepEqual(seen, ['tan-binh', null]);
   });
 
-  it('secret titles stay masked until owned, then show in full', () => {
-    const secret = () => titles.collection(userId).titles.find((t) => t.rarity === 'secret')!;
-    let v = secret();
+  it('secret titles stay masked until owned, then show in full', async () => {
+    const secret = async () => (await titles.collection(userId)).titles.find((t) => t.rarity === 'secret')!;
+    let v = await secret();
     assert.equal(v.title, null);
     assert.equal(v.source, null, 'no condition, no achievement name');
     assert.ok(!v.key.includes('tu-than'), 'the key does not give the id away');
     assert.ok(!JSON.stringify(titles.catalog()).includes('Tử Thần'));
-    assert.ok(!JSON.stringify(titles.collection(userId)).includes('Tử Thần'));
-    const perfect = achievements.overview(userId).achievements.find((a) => a.id === 'perfect-five')!;
+    assert.ok(!JSON.stringify(await titles.collection(userId)).includes('Tử Thần'));
+    const perfect = (await achievements.overview(userId)).achievements.find((a) => a.id === 'perfect-five')!;
     assert.deepEqual(perfect.rewards, [{ type: 'title', title: null }, { type: 'nameStyle', nameStyle: null }]);
 
     // X wins with its 5th move.
-    play(game('win', { reason: 'five', moves: Array.from({ length: 9 }, (_, i) => i), winLine: [0, 2, 4, 6, 8] }));
-    v = secret();
+    await play(game('win', { reason: 'five', moves: Array.from({ length: 9 }, (_, i) => i), winLine: [0, 2, 4, 6, 8] }));
+    v = await secret();
     assert.equal(v.owned, true);
     assert.equal(v.title?.name, 'Tử Thần Caro');
     assert.equal(v.title?.effect, 'glitch');
     assert.equal(v.source?.secret, false);
-    assert.equal(titles.equip(userId, 'tu-than').ok, true);
+    assert.equal((await titles.equip(userId, 'tu-than')).ok, true);
   });
 
-  it('shows the source achievement and its progress for locked titles', () => {
-    for (let i = 0; i < 4; i++) store.recordMatch(userId, game('win'));
-    const v = titles.collection(userId).titles.find((t) => t.key === 'ke-chien-thang')!;
+  it('shows the source achievement and its progress for locked titles', async () => {
+    for (let i = 0; i < 4; i++) await store.recordMatch(userId, game('win'));
+    const v = (await titles.collection(userId)).titles.find((t) => t.key === 'ke-chien-thang')!;
     assert.equal(v.owned, false);
     assert.equal(v.title?.name, 'Kẻ Chiến Thắng');
     assert.deepEqual(v.source && [v.source.achievementId, v.source.percentage, v.source.unlocked], ['wins-10', 40, false]);
   });
 
-  it('new stats back the new title achievements: draws, wins as O, wins by five, distinct opponents', () => {
-    for (let i = 0; i < 5; i++) store.recordMatch(userId, game('draw'));
-    for (let i = 0; i < 10; i++) store.recordMatch(userId, game('win', { opponentUserId: `rival${i % 5}` }));
-    const s = store.stats(userId);
+  it('new stats back the new title achievements: draws, wins as O, wins by five, distinct opponents', async () => {
+    for (let i = 0; i < 5; i++) await store.recordMatch(userId, game('draw'));
+    for (let i = 0; i < 10; i++) await store.recordMatch(userId, game('win', { opponentUserId: `rival${i % 5}` }));
+    const s = await store.stats(userId);
     assert.equal(s.overall.draws, 5);
     assert.equal(s.distinctOpponentsBeaten, 5, 'the same account beaten twice counts once');
-    store.recordMatch(userId, game('win', { myMark: 'O', reason: 'five', moves: Array.from({ length: 20 }, (_, i) => i) }));
-    const t = store.stats(userId);
+    await store.recordMatch(userId, game('win', { myMark: 'O', reason: 'five', moves: Array.from({ length: 20 }, (_, i) => i) }));
+    const t = await store.stats(userId);
     assert.equal(t.winsAsO, 1);
     assert.equal(t.winsByFive, 1);
-    achievements.evaluate(userId);
-    assert.ok(owned().includes('hoa-binh'));
-    assert.ok(!owned().includes('ke-thach-dau'));
+    await achievements.evaluate(userId);
+    assert.ok((await owned()).includes('hoa-binh'));
+    assert.ok(!(await owned()).includes('ke-thach-dau'));
   });
 });
 
@@ -232,62 +236,73 @@ describe('existing players: migration and backfill', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'caro-titles-'));
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(async () => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // On Windows libsql keeps a closed database's file open until the connection is garbage-collected.
+      setFlagsFromString('--expose-gc');
+      (runInNewContext('gc') as () => void)();
+      await new Promise((r) => setTimeout(r, 20));
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+    }
+  });
 
-  it('an account from before titles migrates cleanly and gets the titles of achievements it already had, once', () => {
+  it('an account from before titles migrates cleanly and gets the titles of achievements it already had, once', async () => {
     const path = join(dir, 'caro.db');
     // Build a schema-2 database the way it looked before titles: achievements unlocked, coins paid.
     let store = new AccountStore(path);
-    const userId = store.createUser({ email: 'old@example.com', passwordHash: 'x', nickname: 'Old', avatar: null })!.id;
-    for (let i = 0; i < 10; i++) store.recordMatch(userId, game('win'));
-    store.transaction(() => {
-      for (const id of ['games-1', 'games-10', 'wins-1', 'wins-10', 'streak-3', 'streak-5', 'streak-10', 'pvp-1']) store.insertAchievementUnlock(userId, id, 0);
-      store.addCoins(userId, 1234);
+    const userId = (await store.createUser({ email: 'old@example.com', passwordHash: 'x', nickname: 'Old', avatar: null }))!.id;
+    for (let i = 0; i < 10; i++) await store.recordMatch(userId, game('win'));
+    await store.transaction(async () => {
+      for (const id of ['games-1', 'games-10', 'wins-1', 'wins-10', 'streak-3', 'streak-5', 'streak-10', 'pvp-1']) await store.insertAchievementUnlock(userId, id, 0);
+      await store.addCoins(userId, 1234);
     });
-    store.close();
+    await store.close();
     const raw = new DatabaseSync(path);
-    raw.exec('ALTER TABLE users DROP COLUMN avatar_frame_id; DROP TABLE user_cosmetics; ALTER TABLE users DROP COLUMN name_style_id; DROP TABLE user_titles; ALTER TABLE users DROP COLUMN equipped_title_id; PRAGMA user_version = 2;');
+    // The synchronous store kept the schema version only in `user_version`, so drop the newer `meta` marker too.
+    raw.exec("ALTER TABLE users DROP COLUMN avatar_frame_id; DROP TABLE user_cosmetics; ALTER TABLE users DROP COLUMN name_style_id; DROP TABLE user_titles; ALTER TABLE users DROP COLUMN equipped_title_id; DELETE FROM meta WHERE key = 'schema_version'; PRAGMA user_version = 2;");
     raw.close();
 
     // Reopening runs migration 3.
     store = new AccountStore(path);
-    const user = store.getUser(userId)!;
+    const user = (await store.getUser(userId))!;
     assert.equal(user.equippedTitleId, null);
     assert.equal(user.coins, 1234);
-    assert.deepEqual(store.listTitles(userId), []);
-    assert.equal(store.listAchievements(userId).length, 8, 'old achievements are intact');
+    assert.deepEqual(await store.listTitles(userId), []);
+    assert.equal((await store.listAchievements(userId)).length, 8, 'old achievements are intact');
 
     const achievements = new AchievementManager(store);
-    const first = achievements.evaluate(userId);
+    const first = await achievements.evaluate(userId);
     assert.deepEqual(first.unlocked, [], 'nothing new to unlock');
     const expected = ['bat-bai', 'chien-binh', 'ke-chien-thang', 'ke-huy-diet', 'phong-do-cao', 'tan-binh'];
     assert.deepEqual(first.restoredTitles.map((t) => t.id).sort(), expected);
-    assert.deepEqual(store.listTitles(userId).map((t) => t.titleId).sort(), expected);
-    assert.equal(store.coins(userId), 1234, 'backfill never pays coins again');
+    assert.deepEqual((await store.listTitles(userId)).map((t) => t.titleId).sort(), expected);
+    assert.equal(await store.coins(userId), 1234, 'backfill never pays coins again');
 
     // Running the backfill again (or through the collection) changes nothing.
-    assert.deepEqual(achievements.evaluate(userId).restoredTitles, []);
+    assert.deepEqual((await achievements.evaluate(userId)).restoredTitles, []);
     const titles = new TitleService(store, achievements);
-    assert.deepEqual(titles.collection(userId).restoredTitles, []);
-    assert.equal(store.listTitles(userId).length, expected.length);
+    assert.deepEqual((await titles.collection(userId)).restoredTitles, []);
+    assert.equal((await store.listTitles(userId)).length, expected.length);
 
     // Equipping persists across a restart.
-    assert.equal(titles.equip(userId, 'ke-huy-diet').ok, true);
-    store.close();
+    assert.equal((await titles.equip(userId, 'ke-huy-diet')).ok, true);
+    await store.close();
     store = new AccountStore(path);
-    assert.equal(store.getUser(userId)!.equippedTitleId, 'ke-huy-diet');
-    assert.equal(new TitleService(store, new AchievementManager(store)).collection(userId).titles.find((t) => t.equipped)?.key, 'ke-huy-diet');
-    store.close();
+    assert.equal((await store.getUser(userId))!.equippedTitleId, 'ke-huy-diet');
+    assert.equal((await new TitleService(store, new AchievementManager(store)).collection(userId)).titles.find((t) => t.equipped)?.key, 'ke-huy-diet');
+    await store.close();
   });
 
-  it('equipping a title that is due but not yet backfilled works on the first try', () => {
+  it('equipping a title that is due but not yet backfilled works on the first try', async () => {
     const store = new AccountStore(':memory:');
-    const userId = store.createUser({ email: 'x@example.com', passwordHash: 'x', nickname: 'X', avatar: null })!.id;
-    store.recordMatch(userId, game('loss'));
-    store.insertAchievementUnlock(userId, 'games-1', 20);
+    const userId = (await store.createUser({ email: 'x@example.com', passwordHash: 'x', nickname: 'X', avatar: null }))!.id;
+    await store.recordMatch(userId, game('loss'));
+    await store.insertAchievementUnlock(userId, 'games-1', 20);
     const titles = new TitleService(store, new AchievementManager(store));
-    assert.equal(titles.equip(userId, 'tan-binh').ok, true);
-    store.close();
+    assert.equal((await titles.equip(userId, 'tan-binh')).ok, true);
+    await store.close();
   });
 });
 
@@ -344,7 +359,7 @@ describe('titles over the network', () => {
   async function veteran(email: string) {
     const reg = await api('POST', '/api/auth/register', { email, password: 'correct horse', nickname: email.split('@')[0] });
     const token = reg.body.token as string;
-    server!.accounts.recordMatch(reg.body.user.id, game('loss'));
+    await server!.accounts.recordMatch(reg.body.user.id, game('loss'));
     return { token, id: reg.body.user.id as string };
   }
 

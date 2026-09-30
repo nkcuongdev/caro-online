@@ -53,9 +53,9 @@ export function createAvatarFrameRouter(auth: AuthService, frames: AvatarFrameSe
     next();
   });
 
-  const requireUserId = (req: Request, res: Response) => {
-    const identity = auth.identify(bearerToken(req));
-    if (!identity || !auth.store.getUser(identity.userId)) {
+  const requireUserId = async (req: Request, res: Response) => {
+    const identity = await auth.identify(bearerToken(req));
+    if (!identity || !(await auth.store.getUser(identity.userId))) {
       fail(res, 'UNAUTHORIZED');
       return null;
     }
@@ -63,9 +63,9 @@ export function createAvatarFrameRouter(auth: AuthService, frames: AvatarFrameSe
   };
 
   /** Runs a buy/equip, mapping catalogue refusals to their error codes. */
-  const act = (res: Response, fn: () => object) => {
+  const act = async (res: Response, fn: () => Promise<object>) => {
     try {
-      res.json({ ok: true, ...fn() });
+      res.json({ ok: true, ...(await fn()) });
     } catch (err) {
       if (err instanceof AvatarFrameError) return fail(res, err.code, err.message);
       throw err;
@@ -76,29 +76,29 @@ export function createAvatarFrameRouter(auth: AuthService, frames: AvatarFrameSe
     res.json({ ok: true, frames: frames.catalogue() });
   });
 
-  router.get('/api/me/avatar-frames', (req, res) => {
-    const userId = requireUserId(req, res);
+  router.get('/api/me/avatar-frames', async (req, res) => {
+    const userId = await requireUserId(req, res);
     if (!userId) return;
-    res.json({ ok: true, ...frames.overview(userId) });
+    res.json({ ok: true, ...(await frames.overview(userId)) });
   });
 
-  router.post('/api/me/avatar-frames/:id/buy', (req, res) => {
-    const userId = requireUserId(req, res);
+  router.post('/api/me/avatar-frames/:id/buy', async (req, res) => {
+    const userId = await requireUserId(req, res);
     if (!userId) return;
     if (!allow(userId)) return fail(res, 'RATE_LIMITED');
-    act(res, () => {
-      const result = frames.buy(userId, req.params.id);
+    await act(res, async () => {
+      const result = await frames.buy(userId, req.params.id);
       notify(userId, { coins: result.coins });
       return result;
     });
   });
 
-  router.post('/api/me/avatar-frames/:id/equip', (req, res) => {
-    const userId = requireUserId(req, res);
+  router.post('/api/me/avatar-frames/:id/equip', async (req, res) => {
+    const userId = await requireUserId(req, res);
     if (!userId) return;
     if (!allow(userId)) return fail(res, 'RATE_LIMITED');
-    act(res, () => {
-      const result = frames.equip(userId, req.params.id);
+    await act(res, async () => {
+      const result = await frames.equip(userId, req.params.id);
       notify(userId, { avatarFrame: result.equippedAvatarFrame });
       return result;
     });

@@ -136,32 +136,30 @@ export class AvatarFrameService {
    * anything not owned all come out as `frame_default` (the stored id is only
    * trusted while the ownership row exists, see AccountStore).
    */
-  equippedFor(userId: string | null | undefined): string {
+  async equippedFor(userId: string | null | undefined): Promise<string> {
     if (!userId) return DEFAULT_AVATAR_FRAME;
-    const id = resolveAvatarFrameId(this.store.getUser(userId)?.avatarFrameId);
+    const id = resolveAvatarFrameId((await this.store.getUser(userId))?.avatarFrameId);
     return this.frames.some((f) => f.id === id) ? id : DEFAULT_AVATAR_FRAME;
   }
 
   /** Frame ids the player owns, the default ones included. Retired ids are dropped. */
-  ownedIds(userId: string): Set<string> {
+  async ownedIds(userId: string): Promise<Set<string>> {
     const owned = new Set(this.frames.filter(isDefaultFrame).map((f) => f.id));
-    for (const row of this.store.listCosmetics(userId, 'avatar_frame')) if (this.find(row.itemId)) owned.add(row.itemId);
+    for (const row of await this.store.listCosmetics(userId, 'avatar_frame')) if (this.find(row.itemId)) owned.add(row.itemId);
     return owned;
   }
 
-  state(userId: string): AvatarFrameState {
-    const owned = this.ownedIds(userId);
-    return { ownedAvatarFrames: [...owned], equippedAvatarFrame: this.equippedFor(userId), coins: this.store.coins(userId) };
+  async state(userId: string): Promise<AvatarFrameState> {
+    const [owned, equippedAvatarFrame, coins] = await Promise.all([this.ownedIds(userId), this.equippedFor(userId), this.store.coins(userId)]);
+    return { ownedAvatarFrames: [...owned], equippedAvatarFrame, coins };
   }
 
-  overview(userId: string): AvatarFrameOverview {
-    const owned = this.ownedIds(userId);
-    const equipped = this.equippedFor(userId);
+  async overview(userId: string): Promise<AvatarFrameOverview> {
+    const state = await this.state(userId);
+    const owned = new Set(state.ownedAvatarFrames);
     return {
-      frames: this.frames.map((f) => this.view(f, owned.has(f.id), f.id === equipped)),
-      ownedAvatarFrames: [...owned],
-      equippedAvatarFrame: equipped,
-      coins: this.store.coins(userId),
+      frames: this.frames.map((f) => this.view(f, owned.has(f.id), f.id === state.equippedAvatarFrame)),
+      ...state,
     };
   }
 
@@ -176,26 +174,26 @@ export class AvatarFrameService {
    * purchase and a balance below the price, so a double click or racing
    * requests can't buy twice or go negative.
    */
-  buy(userId: string, rawId: unknown): AvatarFrameState & { frame: AvatarFrameView } {
+  async buy(userId: string, rawId: unknown): Promise<AvatarFrameState & { frame: AvatarFrameView }> {
     const frame = this.require(rawId);
-    if (this.ownedIds(userId).has(frame.id)) throw new AvatarFrameError('ALREADY_OWNED');
+    if ((await this.ownedIds(userId)).has(frame.id)) throw new AvatarFrameError('ALREADY_OWNED');
     const price = framePrice(frame);
     if (price === null) throw new AvatarFrameError(frame.unlock.type === 'achievement' ? 'ACHIEVEMENT_REQUIRED' : 'FRAME_NOT_PURCHASABLE');
-    const outcome = this.store.purchaseCosmetic(userId, 'avatar_frame', frame.id, price);
+    const outcome = await this.store.purchaseCosmetic(userId, 'avatar_frame', frame.id, price);
     if (outcome !== 'OK') throw new AvatarFrameError(outcome);
-    const state = this.state(userId);
+    const state = await this.state(userId);
     return { ...state, frame: this.view(frame, true, state.equippedAvatarFrame === frame.id) };
   }
 
   /** Wears an owned frame (`frame_default` to take a frame off). Notifies listeners only on a real change. */
-  equip(userId: string, rawId: unknown): AvatarFrameState {
+  async equip(userId: string, rawId: unknown): Promise<AvatarFrameState> {
     const frame = this.require(rawId);
-    if (!this.ownedIds(userId).has(frame.id)) {
+    if (!(await this.ownedIds(userId)).has(frame.id)) {
       throw new AvatarFrameError(frame.unlock.type === 'achievement' && !isSecretFrame(frame) ? 'ACHIEVEMENT_REQUIRED' : 'FRAME_NOT_OWNED');
     }
-    const before = this.equippedFor(userId);
+    const before = await this.equippedFor(userId);
     // `frame_default` is stored as NULL: old accounts and new ones look the same.
-    this.store.setAvatarFrame(userId, isDefaultFrame(frame) ? null : frame.id);
+    await this.store.setAvatarFrame(userId, isDefaultFrame(frame) ? null : frame.id);
     if (before !== frame.id) {
       for (const listener of this.equippedListeners) {
         try {
@@ -205,7 +203,7 @@ export class AvatarFrameService {
         }
       }
     }
-    return this.state(userId);
+    return await this.state(userId);
   }
 
   private find(id: string) {

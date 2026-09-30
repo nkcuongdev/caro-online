@@ -37,7 +37,7 @@
 - **Server là nguồn sự thật.** Client chỉ gửi yêu cầu và hiển thị snapshot. Mọi thay đổi đi qua khóa theo từng phòng, nên spam click hay gửi nhiều nước cùng lúc chỉ có đúng một nước được nhận (`seq`, `NOT_YOUR_TURN`, `CELL_TAKEN`, …).
 - **Đồng hồ đồng bộ kiểu NTP.** Client ước lượng độ lệch với server rồi hiển thị `deadline − serverNow`, nên hai người luôn thấy cùng một bộ đếm.
 - **Payload được kiểm tra** bằng Zod, giới hạn 25 event/giây mỗi socket. Token ghế không bao giờ được broadcast.
-- **Bảo mật tài khoản:** mật khẩu băm bằng scrypt, dùng JWT gắn với session trong SQLite (`node:sqlite`, không cần native addon), giới hạn số lần đăng nhập theo IP.
+- **Bảo mật tài khoản:** mật khẩu băm bằng scrypt, dùng JWT gắn với session trong SQLite (Turso trên production, file cục bộ khi dev, qua `@libsql/client`), giới hạn số lần đăng nhập theo IP.
 
 ## 🚀 Chạy trên máy
 
@@ -63,7 +63,7 @@ server/src/
   bot/         đánh giá thế cờ, sinh nước ứng viên, alpha-beta
   tournament/  giải đấu loại trực tiếp
   comms/       chat, sticker, reaction, khán đài, voice (ICE/TURN)
-  accounts/    SQLite, scrypt, JWT, REST, ghi lại ván đấu
+  accounts/    SQLite/Turso (libSQL), scrypt, JWT, REST, ghi lại ván đấu
   achievements/ rewards/ titles/ cosmetics/   thành tích và vật phẩm
   socket/      validate, xác định ghế, broadcast
 client/src/
@@ -81,10 +81,12 @@ Toàn bộ app chạy trên **Render** bằng Blueprint [`render.yaml`](render.y
 | `caro-online` | Static Site (CDN, không ngủ) | https://caro-online-phju.onrender.com |
 | `caro-online-server` | Node Web Service, Singapore | https://caro-online-server-hvev.onrender.com/health |
 
-Mỗi lần push lên `main`, Render tự deploy lại. Khi tạo mới: **New → Blueprint** → chọn repo, rồi điền `CLOUDINARY_URL` (avatar) và `TURN_USERNAME` / `TURN_CREDENTIAL` (voice). Các biến còn lại đã có giá trị mặc định trong `render.yaml`.
+Mỗi lần push lên `main`, Render tự deploy lại. Khi tạo mới: **New → Blueprint** → chọn repo, rồi điền `DATABASE_URL` / `DATABASE_AUTH_TOKEN` (Turso), `CLOUDINARY_URL` (avatar) và `TURN_USERNAME` / `TURN_CREDENTIAL` (voice). Các biến còn lại đã có giá trị mặc định trong `render.yaml`.
+
+**Cơ sở dữ liệu:** tài khoản, lịch sử, thành tích và vật phẩm nằm trên [Turso](https://turso.tech) (SQLite trên cloud, gói miễn phí). Server tự tạo bảng ở lần chạy đầu. Khi dev, bỏ trống `DATABASE_URL` thì server dùng file `server/data/caro.db`.
 
 > [!WARNING]
-> Gói **Free** ngủ sau ~15 phút không có truy cập, và mỗi lần ngủ hoặc deploy sẽ xóa phòng đang chơi **cùng dữ liệu SQLite**. Khi có người chơi thật, hãy chuyển sang gói Starter và gắn ổ đĩa tại `/var/data`.
+> Gói **Free** ngủ sau ~15 phút không có truy cập, và mỗi lần ngủ hoặc deploy sẽ xóa các **phòng đang chơi** (dữ liệu tài khoản trên Turso thì không mất).
 
 Phòng và timer nằm trong bộ nhớ nên server chạy **một instance**. Muốn mở rộng thì thay `RoomRepository` bằng Redis, dùng khóa phân tán, BullMQ cho timer và `@socket.io/redis-adapter`.
 

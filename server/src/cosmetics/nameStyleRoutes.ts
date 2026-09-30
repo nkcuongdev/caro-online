@@ -52,9 +52,9 @@ export function createNameStyleRouter(auth: AuthService, nameStyles: NameStyleSe
     next();
   });
 
-  const requireUserId = (req: Request, res: Response) => {
-    const identity = auth.identify(bearerToken(req));
-    if (!identity || !auth.store.getUser(identity.userId)) {
+  const requireUserId = async (req: Request, res: Response) => {
+    const identity = await auth.identify(bearerToken(req));
+    if (!identity || !(await auth.store.getUser(identity.userId))) {
       fail(res, 'UNAUTHORIZED');
       return null;
     }
@@ -62,9 +62,9 @@ export function createNameStyleRouter(auth: AuthService, nameStyles: NameStyleSe
   };
 
   /** Runs a buy/equip, mapping catalogue refusals to their error codes. */
-  const act = (res: Response, fn: () => object) => {
+  const act = async (res: Response, fn: () => Promise<object>) => {
     try {
-      res.json({ ok: true, ...fn() });
+      res.json({ ok: true, ...(await fn()) });
     } catch (err) {
       if (err instanceof NameStyleError) return fail(res, err.code, err.message);
       throw err;
@@ -75,29 +75,29 @@ export function createNameStyleRouter(auth: AuthService, nameStyles: NameStyleSe
     res.json({ ok: true, styles: nameStyles.catalogue() });
   });
 
-  router.get('/api/me/name-styles', (req, res) => {
-    const userId = requireUserId(req, res);
+  router.get('/api/me/name-styles', async (req, res) => {
+    const userId = await requireUserId(req, res);
     if (!userId) return;
-    res.json({ ok: true, ...nameStyles.overview(userId) });
+    res.json({ ok: true, ...(await nameStyles.overview(userId)) });
   });
 
-  router.post('/api/me/name-styles/:id/buy', (req, res) => {
-    const userId = requireUserId(req, res);
+  router.post('/api/me/name-styles/:id/buy', async (req, res) => {
+    const userId = await requireUserId(req, res);
     if (!userId) return;
     if (!allow(userId)) return fail(res, 'RATE_LIMITED');
-    act(res, () => {
-      const result = nameStyles.buy(userId, req.params.id);
+    await act(res, async () => {
+      const result = await nameStyles.buy(userId, req.params.id);
       notify(userId, { coins: result.coins });
       return result;
     });
   });
 
-  router.post('/api/me/name-styles/:id/equip', (req, res) => {
-    const userId = requireUserId(req, res);
+  router.post('/api/me/name-styles/:id/equip', async (req, res) => {
+    const userId = await requireUserId(req, res);
     if (!userId) return;
     if (!allow(userId)) return fail(res, 'RATE_LIMITED');
-    act(res, () => {
-      const result = nameStyles.equip(userId, req.params.id);
+    await act(res, async () => {
+      const result = await nameStyles.equip(userId, req.params.id);
       notify(userId, { nameStyle: result.equipped });
       return result;
     });

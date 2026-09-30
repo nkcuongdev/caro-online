@@ -6,7 +6,7 @@ import type { AchievementManager, EvaluateResult } from '../achievements/achieve
 import type { AccountsConfig } from '../config.js';
 import type { TitleService } from '../titles/titleService.js';
 import { MAX_NAME_LENGTH, sanitizeName } from '../rooms/names.js';
-import type { PlayerStats, StoredMatch } from './accountStore.js';
+import type { PlayerStats, StoredMatch, UserRow } from './accountStore.js';
 import { normalizeEmail, toPublicAccount, type AuthService, type Identity } from './authService.js';
 import type { MatchRecorder } from './matchRecorder.js';
 import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from './password.js';
@@ -139,9 +139,9 @@ export function createAuthRouter(
   });
 
   /** Resolves the signed-in user or answers 401. */
-  const requireUser = (req: Request, res: Response): (Identity & { user: NonNullable<ReturnType<typeof store.getUser>> }) | null => {
-    const identity = auth.identify(bearerToken(req));
-    const user = identity && store.getUser(identity.userId);
+  const requireUser = async (req: Request, res: Response): Promise<(Identity & { user: UserRow }) | null> => {
+    const identity = await auth.identify(bearerToken(req));
+    const user = identity && (await store.getUser(identity.userId));
     if (!identity || !user) {
       fail(res, 'UNAUTHORIZED');
       return null;
@@ -149,12 +149,12 @@ export function createAuthRouter(
     return { ...identity, user };
   };
 
-  const claim = (tokens: string[], userId: string) => (tokens.length ? recorder.claim(tokens, userId) : 0);
+  const claim = async (tokens: string[], userId: string) => (tokens.length ? recorder.claim(tokens, userId) : 0);
 
   /** Claimed games (and history from before achievements existed) can unlock something at sign-in. */
-  const checkAchievements = (userId: string, stats?: PlayerStats): Pick<EvaluateResult, 'unlocked' | 'restoredTitles'> => {
+  const checkAchievements = async (userId: string, stats?: PlayerStats): Promise<Pick<EvaluateResult, 'unlocked' | 'restoredTitles'>> => {
     try {
-      return achievements.evaluate(userId, stats);
+      return await achievements.evaluate(userId, stats);
     } catch (err) {
       // Never fail a login over this: the next check catches up.
       console.error('[achievements] check failed', err);
@@ -162,8 +162,8 @@ export function createAuthRouter(
     }
   };
   /** The account as stored now (the coin balance may have just changed). */
-  const freshAccount = (userId: string) => {
-    const user = store.getUser(userId);
+  const freshAccount = async (userId: string) => {
+    const user = await store.getUser(userId);
     return user && toPublicAccount(user);
   };
 
@@ -185,11 +185,11 @@ export function createAuthRouter(
       req.get('user-agent') ?? null,
     );
     if (!outcome.ok) return fail(res, outcome.error);
-    const claimed = claim(input.guestTokens, outcome.user.id);
-    const { unlocked, restoredTitles } = checkAchievements(outcome.user.id);
+    const claimed = await claim(input.guestTokens, outcome.user.id);
+    const { unlocked, restoredTitles } = await checkAchievements(outcome.user.id);
     res
       .status(201)
-      .json({ ok: true, token: outcome.token, user: freshAccount(outcome.user.id) ?? toPublicAccount(outcome.user), claimed, achievements: unlocked, restoredTitles });
+      .json({ ok: true, token: outcome.token, user: (await freshAccount(outcome.user.id)) ?? toPublicAccount(outcome.user), claimed, achievements: unlocked, restoredTitles });
   });
 
   router.post('/api/auth/login', async (req, res) => {
@@ -207,28 +207,28 @@ export function createAuthRouter(
       failures.note(key);
       return fail(res, outcome.error);
     }
-    const claimed = claim(input.guestTokens, outcome.user.id);
-    const { unlocked, restoredTitles } = checkAchievements(outcome.user.id);
-    res.json({ ok: true, token: outcome.token, user: freshAccount(outcome.user.id) ?? toPublicAccount(outcome.user), claimed, achievements: unlocked, restoredTitles });
+    const claimed = await claim(input.guestTokens, outcome.user.id);
+    const { unlocked, restoredTitles } = await checkAchievements(outcome.user.id);
+    res.json({ ok: true, token: outcome.token, user: (await freshAccount(outcome.user.id)) ?? toPublicAccount(outcome.user), claimed, achievements: unlocked, restoredTitles });
   });
 
-  router.post('/api/auth/logout', (req, res) => {
-    const identity = auth.identify(bearerToken(req));
-    if (identity) auth.logout(identity);
+  router.post('/api/auth/logout', async (req, res) => {
+    const identity = await auth.identify(bearerToken(req));
+    if (identity) await auth.logout(identity);
     res.json({ ok: true });
   });
 
-  router.get('/api/me', (req, res) => {
-    const me = requireUser(req, res);
+  router.get('/api/me', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
-    const stats = store.stats(me.userId);
-    const { unlocked: newAchievements, restoredTitles } = checkAchievements(me.userId, stats);
-    const user = newAchievements.length ? (freshAccount(me.userId) ?? toPublicAccount(me.user)) : toPublicAccount(me.user);
+    const stats = await store.stats(me.userId);
+    const { unlocked: newAchievements, restoredTitles } = await checkAchievements(me.userId, stats);
+    const user = newAchievements.length ? ((await freshAccount(me.userId)) ?? toPublicAccount(me.user)) : toPublicAccount(me.user);
     res.json({ ok: true, user, stats, newAchievements, restoredTitles });
   });
 
-  router.patch('/api/me', (req, res) => {
-    const me = requireUser(req, res);
+  router.patch('/api/me', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
     const parsed = schemas.profile.safeParse(req.body);
     if (!parsed.success) return fail(res, 'INVALID_PAYLOAD');
@@ -243,30 +243,30 @@ export function createAuthRouter(
       if (!value) return fail(res, 'INVALID_AVATAR');
       patch.avatar = value;
     }
-    const user = store.updateProfile(me.userId, patch);
+    const user = await store.updateProfile(me.userId, patch);
     res.json({ ok: true, user: user && toPublicAccount(user) });
   });
 
-  router.post('/api/me/claim', (req, res) => {
-    const me = requireUser(req, res);
+  router.post('/api/me/claim', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
     const parsed = schemas.claim.safeParse(req.body);
     if (!parsed.success) return fail(res, 'INVALID_PAYLOAD');
-    const claimed = claim(parsed.data.guestTokens, me.userId);
-    const { unlocked, restoredTitles } = claimed ? checkAchievements(me.userId) : { unlocked: [], restoredTitles: [] };
+    const claimed = await claim(parsed.data.guestTokens, me.userId);
+    const { unlocked, restoredTitles } = claimed ? await checkAchievements(me.userId) : { unlocked: [], restoredTitles: [] };
     res.json({ ok: true, claimed, achievements: unlocked, restoredTitles });
   });
 
-  router.get('/api/me/stats', (req, res) => {
-    const me = requireUser(req, res);
+  router.get('/api/me/stats', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
-    res.json({ ok: true, stats: store.stats(me.userId) });
+    res.json({ ok: true, stats: await store.stats(me.userId) });
   });
 
-  router.get('/api/me/achievements', (req, res) => {
-    const me = requireUser(req, res);
+  router.get('/api/me/achievements', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
-    res.json({ ok: true, ...achievements.overview(me.userId) });
+    res.json({ ok: true, ...(await achievements.overview(me.userId)) });
   });
 
   router.get('/api/titles', (_req, res) => {
@@ -274,29 +274,29 @@ export function createAuthRouter(
     res.json({ ok: true, titles: titles.catalog() });
   });
 
-  router.get('/api/me/titles', (req, res) => {
-    const me = requireUser(req, res);
+  router.get('/api/me/titles', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
-    res.json({ ok: true, ...titles.collection(me.userId) });
+    res.json({ ok: true, ...(await titles.collection(me.userId)) });
   });
 
-  router.patch('/api/me/title', (req, res) => {
-    const me = requireUser(req, res);
+  router.patch('/api/me/title', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
     const parsed = schemas.equipTitle.safeParse(req.body);
     if (!parsed.success) return fail(res, 'INVALID_PAYLOAD');
-    const outcome = titles.equip(me.userId, parsed.data.titleId);
+    const outcome = await titles.equip(me.userId, parsed.data.titleId);
     if (!outcome.ok) return fail(res, outcome.error);
-    res.json({ ok: true, titleId: outcome.titleId, title: outcome.title, user: freshAccount(me.userId) });
+    res.json({ ok: true, titleId: outcome.titleId, title: outcome.title, user: await freshAccount(me.userId) });
   });
 
-  router.get('/api/me/matches', (req, res) => {
-    const me = requireUser(req, res);
+  router.get('/api/me/matches', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
     const parsed = schemas.matches.safeParse(req.query);
     if (!parsed.success) return fail(res, 'INVALID_PAYLOAD');
     const { limit, before, mode } = parsed.data;
-    const rows = store.listMatches(me.userId, { limit: limit + 1, before, mode });
+    const rows = await store.listMatches(me.userId, { limit: limit + 1, before, mode });
     const page = rows.slice(0, limit);
     res.json({
       ok: true,
@@ -305,11 +305,11 @@ export function createAuthRouter(
     });
   });
 
-  router.get('/api/me/matches/:id', (req, res) => {
-    const me = requireUser(req, res);
+  router.get('/api/me/matches/:id', async (req, res) => {
+    const me = await requireUser(req, res);
     if (!me) return;
     const id = Number(req.params.id);
-    const match = Number.isInteger(id) && id > 0 ? store.getMatch(me.userId, id) : null;
+    const match = Number.isInteger(id) && id > 0 ? await store.getMatch(me.userId, id) : null;
     if (!match) return fail(res, 'NOT_FOUND');
     res.json({ ok: true, match: toPublicMatch(match, true) });
   });

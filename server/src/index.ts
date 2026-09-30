@@ -11,13 +11,14 @@ if (existsSync(envFile) && typeof process.loadEnvFile === 'function') process.lo
 
 const cfg = loadConfig();
 const server = createCaroServer(cfg);
-// Open (and migrate) the accounts database now, so a bad DATABASE_PATH fails the deploy instead of the first login.
-server.accounts.open();
+// Open (and migrate) the accounts database before listening, so a bad DATABASE_URL / DATABASE_PATH
+// or token fails the deploy (the health check never passes) instead of the first login.
+await server.accounts.open();
 
 server.httpServer.listen(cfg.port, () => {
   console.log(`[caro] server listening on :${cfg.port}`);
   console.log(`[caro] allowed origins: ${cfg.clientOrigins.join(', ')}`);
-  console.log(`[caro] accounts database: ${cfg.accounts.databasePath}${cfg.accounts.jwtSecret ? '' : ' (JWT key kept in the database)'}`);
+  console.log(`[caro] accounts database: ${server.accounts.location}${cfg.accounts.jwtSecret ? '' : ' (JWT key kept in the database)'}`);
   console.log(`[caro] avatar storage: ${cfg.avatars.cloudinary ? `cloudinary (${cfg.avatars.cloudinary.cloudName})` : `local disk (${cfg.avatars.localDir})`}`);
 });
 

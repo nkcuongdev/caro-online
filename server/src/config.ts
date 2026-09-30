@@ -42,8 +42,14 @@ export interface VoiceConfig {
 
 /** Optional accounts (guests never need one). */
 export interface AccountsConfig {
-  /** SQLite file holding users, sessions and match history. Must sit on a persistent disk in production. */
+  /**
+   * Where users, sessions and match history live: a Turso database
+   * (`DATABASE_URL=libsql://…`) or, without one, the SQLite file `DATABASE_PATH`,
+   * which must then sit on a persistent disk in production.
+   */
   databasePath: string;
+  /** Turso auth token for a `libsql://` DATABASE_URL. */
+  databaseAuthToken: string | undefined;
   /** HS256 key for login tokens. Unset: a random key is generated once and kept in the database. */
   jwtSecret: string | null;
   /** How long a login lasts. */
@@ -111,7 +117,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       cloudinary: loadCloudinary(env),
     },
     accounts: {
-      databasePath: env.DATABASE_PATH?.trim() || 'data/caro.db',
+      databasePath: env.DATABASE_URL?.trim() || env.DATABASE_PATH?.trim() || 'data/caro.db',
+      databaseAuthToken: env.DATABASE_AUTH_TOKEN?.trim() || undefined,
       jwtSecret: loadJwtSecret(env),
       sessionTtlMs: positive(env.AUTH_SESSION_DAYS, 30) * 24 * 60 * 60_000,
       authBurst: positive(env.AUTH_ATTEMPTS_PER_10_MIN, 20),

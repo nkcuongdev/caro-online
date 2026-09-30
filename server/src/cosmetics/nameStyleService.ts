@@ -116,25 +116,24 @@ export class NameStyleService {
    * anything not owned all come out as `default` (the stored id is only
    * trusted when the ownership row exists, see AccountStore).
    */
-  equippedFor(userId: string | null | undefined): string {
+  async equippedFor(userId: string | null | undefined): Promise<string> {
     if (!userId) return DEFAULT_NAME_STYLE;
-    return resolveNameStyleId(this.store.getUser(userId)?.nameStyleId);
+    return resolveNameStyleId((await this.store.getUser(userId))?.nameStyleId);
   }
 
   /** Style ids the player owns, `default` included. Retired ids are dropped. */
-  ownedIds(userId: string): Set<string> {
+  async ownedIds(userId: string): Promise<Set<string>> {
     const owned = new Set([DEFAULT_NAME_STYLE]);
-    for (const row of this.store.listCosmetics(userId, 'name_style')) if (getNameStyle(row.itemId)) owned.add(row.itemId);
+    for (const row of await this.store.listCosmetics(userId, 'name_style')) if (getNameStyle(row.itemId)) owned.add(row.itemId);
     return owned;
   }
 
-  overview(userId: string): NameStyleOverview {
-    const owned = this.ownedIds(userId);
-    const equipped = this.equippedFor(userId);
+  async overview(userId: string): Promise<NameStyleOverview> {
+    const [owned, equipped, coins] = await Promise.all([this.ownedIds(userId), this.equippedFor(userId), this.store.coins(userId)]);
     return {
       styles: this.styles.map((s) => this.view(s, owned.has(s.id), s.id === equipped)),
       equipped,
-      coins: this.store.coins(userId),
+      coins,
     };
   }
 
@@ -149,23 +148,23 @@ export class NameStyleService {
    * purchase and a balance below the price, so racing requests can't buy
    * twice or go negative.
    */
-  buy(userId: string, rawId: unknown): { style: NameStyleView; coins: number } {
+  async buy(userId: string, rawId: unknown): Promise<{ style: NameStyleView; coins: number }> {
     const style = this.require(rawId);
-    const owned = this.ownedIds(userId);
+    const owned = await this.ownedIds(userId);
     if (owned.has(style.id)) throw new NameStyleError('ALREADY_OWNED');
     if (!isPurchasable(style)) throw new NameStyleError(this.lockedReason(style));
-    const outcome = this.store.purchaseCosmetic(userId, 'name_style', style.id, style.price!);
+    const outcome = await this.store.purchaseCosmetic(userId, 'name_style', style.id, style.price!);
     if (outcome !== 'OK') throw new NameStyleError(outcome);
-    return { style: this.view(style, true, false), coins: this.store.coins(userId) };
+    return { style: this.view(style, true, false), coins: await this.store.coins(userId) };
   }
 
   /** Wears an owned style (`default` to take a style off). Notifies listeners only on a real change. */
-  equip(userId: string, rawId: unknown): { equipped: string } {
+  async equip(userId: string, rawId: unknown): Promise<{ equipped: string }> {
     const style = this.require(rawId);
-    if (!this.ownedIds(userId).has(style.id)) throw new NameStyleError(this.lockedReason(style));
-    const before = this.equippedFor(userId);
+    if (!(await this.ownedIds(userId)).has(style.id)) throw new NameStyleError(this.lockedReason(style));
+    const before = await this.equippedFor(userId);
     // `default` is stored as NULL: old accounts and new ones look the same.
-    this.store.setNameStyle(userId, style.id === DEFAULT_NAME_STYLE ? null : style.id);
+    await this.store.setNameStyle(userId, style.id === DEFAULT_NAME_STYLE ? null : style.id);
     if (before !== style.id) {
       for (const listener of this.equippedListeners) {
         try {

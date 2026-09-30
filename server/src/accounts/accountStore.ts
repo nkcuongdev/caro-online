@@ -1,21 +1,24 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { DatabaseSync, type SQLInputValue } from 'node:sqlite';
+import { createClient, type Client, type InArgs, type InValue, type Transaction, type Value } from '@libsql/client';
 import { nanoid } from 'nanoid';
 import type { RewardSource } from '../rewards/rewardService.js';
 import type { BotDifficulty, FinishReason, Mark, RoomMode } from '../types.js';
 
 /**
- * Durable storage for accounts, login sessions and match history: one SQLite
- * file via Node's built-in `node:sqlite` (no native addon to build on deploy).
+ * Durable storage for accounts, login sessions and match history, in SQLite
+ * through libSQL: a Turso database in production (`libsql://…` URL plus an auth
+ * token), a local file (`data/caro.db`) or `:memory:` in development and tests.
+ * The SQL is the same everywhere.
  *
  * Rooms and timers stay in memory as before; only finished games and profiles
- * are written here. Queries are tiny and indexed, so the synchronous driver
- * costs well under a millisecond per call.
+ * are written here. Every call is async because a Turso query is a network
+ * round trip; `transaction()` groups writes that must land together.
  *
- * The file is opened on first use, so a server (or test) that never touches
- * accounts never creates it.
+ * The database is opened on first use, so a server (or test) that never
+ * touches accounts never creates it.
  */
 
 export type MatchResult = 'win' | 'loss' | 'draw';
@@ -260,7 +263,32 @@ const USER_SELECT = `SELECT u.*, EXISTS (
     SELECT 1 FROM user_cosmetics c WHERE c.user_id = u.id AND c.kind = 'avatar_frame' AND c.item_id = u.avatar_frame_id
   ) AS avatar_frame_owned FROM users u`;
 
-type Row = Record<string, SQLInputValue>;
+type Row = Record<string, Value>;
+type Stmt = { sql: string; args?: InArgs };
+
+/**
+ * Serializes async work: each `run` starts once the previous one settled. A
+ * local libSQL database refuses a statement while a transaction holds its
+ * connection (it doesn't queue), so local access goes through one of these.
+ */
+class Lock {
+  private tail: Promise<unknown> = Promise.resolve();
+
+  run<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.tail.then(fn, fn);
+    this.tail = next.catch(() => {});
+    return next;
+  }
+}
+
+/** `libsql://…`, `https://…`, `wss://…`, `file:…` pass through; `:memory:` and plain paths are local. */
+function toUrl(location: string): { url: string; local: boolean } {
+  if (location === ':memory:') return { url: ':memory:', local: true };
+  if (/^file:/i.test(location)) return { url: location, local: true };
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(location)) return { url: location, local: false };
+  mkdirSync(dirname(location), { recursive: true });
+  return { url: `file:${location}`, local: true };
+}
 
 const emptyMode = (): ModeStats => ({ games: 0, wins: 0, losses: 0, draws: 0, winRate: 0 });
 
@@ -289,91 +317,169 @@ export function levelFor(xp: number) {
 }
 
 export class AccountStore {
-  private handle: DatabaseSync | null = null;
-  private txDepth = 0;
+  private client: Client | null = null;
+  private opening: Promise<Client> | null = null;
+  private readonly local: boolean;
+  private readonly url: string;
+  /** The transaction the current async call chain runs in, if any (see `transaction`). */
+  private readonly tx = new AsyncLocalStorage<Transaction>();
+  /** Transactions run one at a time; locally, plain statements wait for them too (see Lock). */
+  private readonly lock = new Lock();
 
   constructor(
-    private readonly path: string,
+    /** `libsql://…` (Turso), `file:…`, `:memory:` or a file path. */
+    location: string,
     private readonly now: () => number = Date.now,
-  ) {}
+    /** Turso auth token for a remote database. */
+    private readonly authToken?: string,
+  ) {
+    ({ url: this.url, local: this.local } = toUrl(location));
+  }
+
+  /** Where the database lives, for the boot log (the token is never included). */
+  get location() {
+    return this.url;
+  }
 
   /** Opens (and migrates) the database. Called lazily; call it at boot to fail fast. */
-  open(): DatabaseSync {
-    if (this.handle) return this.handle;
-    if (this.path !== ':memory:') mkdirSync(dirname(this.path), { recursive: true });
-    const db = new DatabaseSync(this.path);
-    db.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;');
-    if (this.path !== ':memory:') db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;');
-    const current = Number((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version);
-    for (let v = current + 1; v <= SCHEMA_VERSION; v++) {
-      db.exec('BEGIN');
-      try {
-        db.exec(MIGRATIONS[v]);
-        db.exec(`PRAGMA user_version = ${v}`);
-        db.exec('COMMIT');
-      } catch (err) {
-        db.exec('ROLLBACK');
+  open(): Promise<Client> {
+    if (this.client) return Promise.resolve(this.client);
+    this.opening ??= this.connect().then(
+      (client) => (this.client = client),
+      (err) => {
+        this.opening = null;
         throw err;
+      },
+    );
+    return this.opening;
+  }
+
+  private async connect(): Promise<Client> {
+    const client = createClient({ url: this.url, authToken: this.authToken, intMode: 'number' });
+    try {
+      if (this.local) {
+        await client.execute('PRAGMA foreign_keys = ON');
+        if (this.url !== ':memory:') await client.execute('PRAGMA journal_mode = WAL');
       }
+      for (let v = (await this.schemaVersion(client)) + 1; v <= SCHEMA_VERSION; v++) {
+        const tx = await client.transaction('write');
+        try {
+          await tx.executeMultiple(MIGRATIONS[v]);
+          await tx.execute({ sql: "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?)", args: [String(v)] });
+          await tx.commit();
+        } finally {
+          tx.close();
+        }
+      }
+      return client;
+    } catch (err) {
+      client.close();
+      throw err;
     }
-    this.handle = db;
-    return db;
-  }
-
-  close() {
-    this.handle?.close();
-    this.handle = null;
-  }
-
-  private get db() {
-    return this.open();
   }
 
   /**
-   * Runs `fn` in one write transaction (committed if it returns, rolled back if
-   * it throws). Nested calls join the outer transaction.
+   * The applied migration, kept in `meta` (a Turso database may not persist
+   * `PRAGMA user_version`). Local files created before this read it from
+   * `user_version`, where the synchronous store used to keep it.
    */
-  transaction<T>(fn: () => T): T {
-    if (this.txDepth > 0) return fn();
-    const db = this.db;
-    db.exec('BEGIN IMMEDIATE');
-    this.txDepth++;
-    try {
-      const result = fn();
-      db.exec('COMMIT');
-      return result;
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    } finally {
-      this.txDepth--;
+  private async schemaVersion(client: Client): Promise<number> {
+    const hasMeta = (await client.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'")).rows.length > 0;
+    if (hasMeta) {
+      const row = (await client.execute("SELECT value FROM meta WHERE key = 'schema_version'")).rows[0];
+      if (row) return Number(row.value);
     }
+    try {
+      return Number((await client.execute('PRAGMA user_version')).rows[0]?.user_version ?? 0);
+    } catch {
+      return 0;
+    }
+  }
+
+  async close() {
+    const client = this.client ?? (await this.opening?.catch(() => null));
+    this.client = null;
+    this.opening = null;
+    client?.close();
+  }
+
+  /**
+   * Runs `fn` in one write transaction (committed if it resolves, rolled back if
+   * it throws). Every store call awaited inside it joins the transaction, and
+   * so do nested `transaction` calls. Await only store calls inside: the
+   * transaction holds the write lock until `fn` settles.
+   */
+  async transaction<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.tx.getStore()) return fn();
+    const client = await this.open();
+    return this.lock.run(async () => {
+      const tx = await client.transaction('write');
+      try {
+        const result = await this.tx.run(tx, fn);
+        await tx.commit();
+        return result;
+      } catch (err) {
+        await tx.rollback().catch(() => {});
+        throw err;
+      } finally {
+        tx.close();
+      }
+    });
+  }
+
+  private async execute(sql: string, args: InValue[] = []) {
+    const inTx = this.tx.getStore();
+    if (inTx) return inTx.execute({ sql, args });
+    const client = await this.open();
+    return this.local ? this.lock.run(() => client.execute({ sql, args })) : client.execute({ sql, args });
+  }
+
+  /** Several reads in one round trip (a Turso batch), or in order inside a transaction. */
+  private async readMany(stmts: Stmt[]) {
+    const inTx = this.tx.getStore();
+    if (inTx) {
+      const out = [];
+      for (const s of stmts) out.push(await inTx.execute(s));
+      return out;
+    }
+    const client = await this.open();
+    return this.local ? this.lock.run(() => client.batch(stmts, 'read')) : client.batch(stmts, 'read');
+  }
+
+  private async one(sql: string, args: InValue[] = []): Promise<Row | undefined> {
+    return (await this.execute(sql, args)).rows[0] as Row | undefined;
+  }
+
+  private async all(sql: string, args: InValue[] = []): Promise<Row[]> {
+    return (await this.execute(sql, args)).rows as unknown as Row[];
+  }
+
+  private async changes(sql: string, args: InValue[] = []): Promise<number> {
+    return (await this.execute(sql, args)).rowsAffected;
   }
 
   // ─── Meta ──────────────────────────────────────────────────────────────────
 
   /** A random value generated once and kept in the database (used as the JWT key when JWT_SECRET is unset). */
-  persistentSecret(key: string): string {
-    const row = this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined;
-    if (row) return row.value;
-    const value = randomBytes(48).toString('base64url');
-    this.db.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)').run(key, value);
-    return (this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string }).value;
+  async persistentSecret(key: string): Promise<string> {
+    const row = await this.one('SELECT value FROM meta WHERE key = ?', [key]);
+    if (row) return String(row.value);
+    await this.execute('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)', [key, randomBytes(48).toString('base64url')]);
+    return String((await this.one('SELECT value FROM meta WHERE key = ?', [key]))!.value);
   }
 
   // ─── Users ─────────────────────────────────────────────────────────────────
 
   /** Returns null when the email is already taken. */
-  createUser(input: { email: string; passwordHash: string; nickname: string; avatar: string | null }): UserRow | null {
+  async createUser(input: { email: string; passwordHash: string; nickname: string; avatar: string | null }): Promise<UserRow | null> {
     const now = this.now();
     const id = nanoid(16);
     try {
-      this.db
-        .prepare(
-          `INSERT INTO users (id, email, password_hash, nickname, avatar, created_at, updated_at, last_login_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(id, input.email, input.passwordHash, input.nickname, input.avatar, now, now, now);
+      await this.execute(
+        `INSERT INTO users (id, email, password_hash, nickname, avatar, created_at, updated_at, last_login_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, input.email, input.passwordHash, input.nickname, input.avatar, now, now, now],
+      );
     } catch (err) {
       if (isUniqueViolation(err)) return null;
       throw err;
@@ -381,73 +487,74 @@ export class AccountStore {
     return this.getUser(id);
   }
 
-  getUser(id: string): UserRow | null {
-    return toUser(this.db.prepare(`${USER_SELECT} WHERE u.id = ?`).get(id) as Row | undefined);
+  async getUser(id: string): Promise<UserRow | null> {
+    return toUser(await this.one(`${USER_SELECT} WHERE u.id = ?`, [id]));
   }
 
-  findUserByEmail(email: string): UserRow | null {
-    return toUser(this.db.prepare(`${USER_SELECT} WHERE u.email = ?`).get(email) as Row | undefined);
+  async findUserByEmail(email: string): Promise<UserRow | null> {
+    return toUser(await this.one(`${USER_SELECT} WHERE u.email = ?`, [email]));
   }
 
-  updateProfile(id: string, patch: { nickname?: string; avatar?: string | null }): UserRow | null {
+  async updateProfile(id: string, patch: { nickname?: string; avatar?: string | null }): Promise<UserRow | null> {
     const sets: string[] = [];
-    const values: SQLInputValue[] = [];
+    const values: InValue[] = [];
     if (patch.nickname !== undefined) sets.push('nickname = ?') && values.push(patch.nickname);
     if (patch.avatar !== undefined) sets.push('avatar = ?') && values.push(patch.avatar);
-    if (sets.length) {
-      this.db.prepare(`UPDATE users SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...values, this.now(), id);
-    }
+    if (sets.length) await this.execute(`UPDATE users SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`, [...values, this.now(), id]);
     return this.getUser(id);
   }
 
-  setPasswordHash(id: string, passwordHash: string) {
-    this.db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(passwordHash, this.now(), id);
+  async setPasswordHash(id: string, passwordHash: string) {
+    await this.execute('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?', [passwordHash, this.now(), id]);
   }
 
-  touchLogin(id: string) {
-    this.db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(this.now(), id);
+  async touchLogin(id: string) {
+    await this.execute('UPDATE users SET last_login_at = ? WHERE id = ?', [this.now(), id]);
   }
 
   // ─── Sessions ──────────────────────────────────────────────────────────────
 
-  createSession(userId: string, ttlMs: number, userAgent: string | null): SessionRow {
+  async createSession(userId: string, ttlMs: number, userAgent: string | null): Promise<SessionRow> {
     const now = this.now();
     const row: SessionRow = { id: nanoid(24), userId, createdAt: now, expiresAt: now + ttlMs };
-    this.db
-      .prepare('INSERT INTO sessions (id, user_id, created_at, expires_at, last_seen_at, user_agent) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(row.id, userId, now, row.expiresAt, now, userAgent?.slice(0, 200) ?? null);
+    await this.execute('INSERT INTO sessions (id, user_id, created_at, expires_at, last_seen_at, user_agent) VALUES (?, ?, ?, ?, ?, ?)', [
+      row.id,
+      userId,
+      now,
+      row.expiresAt,
+      now,
+      userAgent?.slice(0, 200) ?? null,
+    ]);
     return row;
   }
 
-  getSession(id: string): SessionRow | null {
-    const r = this.db.prepare('SELECT id, user_id, created_at, expires_at FROM sessions WHERE id = ?').get(id) as Row | undefined;
+  async getSession(id: string): Promise<SessionRow | null> {
+    const r = await this.one('SELECT id, user_id, created_at, expires_at FROM sessions WHERE id = ?', [id]);
     if (!r || Number(r.expires_at) <= this.now()) return null;
     return { id: String(r.id), userId: String(r.user_id), createdAt: Number(r.created_at), expiresAt: Number(r.expires_at) };
   }
 
-  deleteSession(id: string) {
-    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+  async deleteSession(id: string) {
+    await this.execute('DELETE FROM sessions WHERE id = ?', [id]);
   }
 
-  pruneSessions() {
-    if (!this.handle) return;
-    this.db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(this.now());
+  async pruneSessions() {
+    if (!this.client) return;
+    await this.execute('DELETE FROM sessions WHERE expires_at <= ?', [this.now()]);
   }
 
   // ─── Matches ───────────────────────────────────────────────────────────────
 
   /** Idempotent: the same game is stored at most once per user. Returns whether a row was added. */
-  recordMatch(userId: string, m: MatchRecord): boolean {
-    const res = this.db
-      .prepare(
-        `INSERT OR IGNORE INTO matches (
-          user_id, room_id, round, mode, result, reason, my_mark, my_name, my_avatar,
-          opponent_name, opponent_avatar, opponent_is_bot, opponent_user_id, bot_difficulty,
-          board_size, turn_ms, move_count, moves, win_line, started_at, finished_at,
-          tournament_id, tournament_name, tournament_round, tournament_total_rounds
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
+  async recordMatch(userId: string, m: MatchRecord): Promise<boolean> {
+    const added = await this.changes(
+      `INSERT OR IGNORE INTO matches (
+        user_id, room_id, round, mode, result, reason, my_mark, my_name, my_avatar,
+        opponent_name, opponent_avatar, opponent_is_bot, opponent_user_id, bot_difficulty,
+        board_size, turn_ms, move_count, moves, win_line, started_at, finished_at,
+        tournament_id, tournament_name, tournament_round, tournament_total_rounds
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
         userId,
         m.roomId,
         m.round,
@@ -473,35 +580,58 @@ export class AccountStore {
         m.tournamentName,
         m.tournamentRound,
         m.tournamentTotalRounds,
-      );
-    return Number(res.changes) > 0;
+      ],
+    );
+    return added > 0;
   }
 
   /** Newest first. `before` is the id of the last match of the previous page. */
-  listMatches(userId: string, opts: { limit: number; before?: number; mode?: RoomMode }): StoredMatch[] {
+  async listMatches(userId: string, opts: { limit: number; before?: number; mode?: RoomMode }): Promise<StoredMatch[]> {
     const where = ['user_id = ?'];
-    const values: SQLInputValue[] = [userId];
+    const values: InValue[] = [userId];
     if (opts.before) where.push('id < ?') && values.push(opts.before);
     if (opts.mode) where.push('mode = ?') && values.push(opts.mode);
-    const rows = this.db
-      .prepare(`SELECT * FROM matches WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`)
-      .all(...values, opts.limit) as Row[];
+    const rows = await this.all(`SELECT * FROM matches WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`, [...values, opts.limit]);
     return rows.map(toMatch);
   }
 
-  getMatch(userId: string, id: number): StoredMatch | null {
-    const row = this.db.prepare('SELECT * FROM matches WHERE user_id = ? AND id = ?').get(userId, id) as Row | undefined;
+  async getMatch(userId: string, id: number): Promise<StoredMatch | null> {
+    const row = await this.one('SELECT * FROM matches WHERE user_id = ? AND id = ?', [userId, id]);
     return row ? toMatch(row) : null;
   }
 
-  stats(userId: string): PlayerStats {
+  async stats(userId: string): Promise<PlayerStats> {
+    // One round trip on Turso: the five reads go out as a single batch.
+    const [countsRs, botRs, aggRs, favRs, seqRs] = await this.readMany([
+      { sql: 'SELECT mode, result, COUNT(*) AS n FROM matches WHERE user_id = ? GROUP BY mode, result', args: [userId] },
+      { sql: `SELECT bot_difficulty AS d, COUNT(*) AS n FROM matches WHERE user_id = ? AND mode = 'bot' AND result = 'win' GROUP BY d`, args: [userId] },
+      {
+        sql: `SELECT
+           COALESCE(SUM(move_count), 0) AS moves,
+           -- X moves first, so X made ceil(n/2) of the n moves and O floor(n/2).
+           COALESCE(SUM(CASE WHEN my_mark = 'O' THEN move_count / 2 ELSE (move_count + 1) / 2 END), 0) AS ownMoves,
+           COALESCE(MAX(move_count), 0) AS longest,
+           COALESCE(SUM(MAX(finished_at - started_at, 0)), 0) AS playMs,
+           SUM(CASE WHEN mode = 'tournament' AND result = 'win' AND tournament_round = tournament_total_rounds - 1 THEN 1 ELSE 0 END) AS titles,
+           MIN(CASE WHEN result = 'win' AND reason = 'five' THEN (move_count + 1) / 2 END) AS fastest,
+           SUM(CASE WHEN result = 'win' AND reason = 'five' THEN 1 ELSE 0 END) AS byFive,
+           SUM(CASE WHEN result = 'win' AND my_mark = 'O' THEN 1 ELSE 0 END) AS asO,
+           COUNT(DISTINCT CASE WHEN result = 'win' THEN opponent_user_id END) AS rivals
+         FROM matches WHERE user_id = ?`,
+        args: [userId],
+      },
+      { sql: 'SELECT board_size AS size, COUNT(*) AS n FROM matches WHERE user_id = ? GROUP BY board_size ORDER BY n DESC, size ASC LIMIT 1', args: [userId] },
+      // Streaks need the whole sequence; a player's history is small enough to walk.
+      { sql: 'SELECT result FROM matches WHERE user_id = ? ORDER BY finished_at ASC, id ASC', args: [userId] },
+    ]);
+
     const byMode: Record<RoomMode, ModeStats> = { pvp: emptyMode(), bot: emptyMode(), tournament: emptyMode() };
     const overall = emptyMode();
-    const counts = this.db
-      .prepare('SELECT mode, result, COUNT(*) AS n FROM matches WHERE user_id = ? GROUP BY mode, result')
-      .all(userId) as { mode: RoomMode; result: MatchResult; n: number }[];
     let xp = 0;
-    for (const { mode, result, n } of counts) {
+    for (const row of countsRs.rows) {
+      const mode = String(row.mode) as RoomMode;
+      const result = String(row.result) as MatchResult;
+      const n = Number(row.n);
       const bucket = byMode[mode] ?? (byMode[mode] = emptyMode());
       for (const s of [bucket, overall]) {
         s.games += n;
@@ -514,46 +644,14 @@ export class AccountStore {
     for (const s of [overall, ...Object.values(byMode)]) s.winRate = s.games ? Math.round((s.wins / s.games) * 1000) / 10 : 0;
 
     const botWins: Record<BotDifficulty, number> = { easy: 0, medium: 0, hard: 0 };
-    const botRows = this.db
-      .prepare(`SELECT bot_difficulty AS d, COUNT(*) AS n FROM matches WHERE user_id = ? AND mode = 'bot' AND result = 'win' GROUP BY d`)
-      .all(userId) as { d: BotDifficulty | null; n: number }[];
-    for (const { d, n } of botRows) if (d && d in botWins) botWins[d] = n;
+    for (const row of botRs.rows) {
+      const d = row.d == null ? null : (String(row.d) as BotDifficulty);
+      if (d && d in botWins) botWins[d] = Number(row.n);
+    }
 
-    const agg = this.db
-      .prepare(
-        `SELECT
-           COALESCE(SUM(move_count), 0) AS moves,
-           -- X moves first, so X made ceil(n/2) of the n moves and O floor(n/2).
-           COALESCE(SUM(CASE WHEN my_mark = 'O' THEN move_count / 2 ELSE (move_count + 1) / 2 END), 0) AS ownMoves,
-           COALESCE(MAX(move_count), 0) AS longest,
-           COALESCE(SUM(MAX(finished_at - started_at, 0)), 0) AS playMs,
-           SUM(CASE WHEN mode = 'tournament' AND result = 'win' AND tournament_round = tournament_total_rounds - 1 THEN 1 ELSE 0 END) AS titles,
-           MIN(CASE WHEN result = 'win' AND reason = 'five' THEN (move_count + 1) / 2 END) AS fastest,
-           SUM(CASE WHEN result = 'win' AND reason = 'five' THEN 1 ELSE 0 END) AS byFive,
-           SUM(CASE WHEN result = 'win' AND my_mark = 'O' THEN 1 ELSE 0 END) AS asO,
-           COUNT(DISTINCT CASE WHEN result = 'win' THEN opponent_user_id END) AS rivals
-         FROM matches WHERE user_id = ?`,
-      )
-      .get(userId) as {
-      moves: number;
-      ownMoves: number;
-      longest: number;
-      playMs: number;
-      titles: number | null;
-      fastest: number | null;
-      byFive: number | null;
-      asO: number | null;
-      rivals: number;
-    };
-
-    const fav = this.db
-      .prepare('SELECT board_size AS size, COUNT(*) AS n FROM matches WHERE user_id = ? GROUP BY board_size ORDER BY n DESC, size ASC LIMIT 1')
-      .get(userId) as { size: number } | undefined;
-
-    // Streaks need the whole sequence; a player's history is small enough to walk.
-    const sequence = (this.db.prepare('SELECT result FROM matches WHERE user_id = ? ORDER BY finished_at ASC, id ASC').all(userId) as {
-      result: MatchResult;
-    }[]).map((r) => r.result);
+    const agg = aggRs.rows[0] as Row;
+    const fav = favRs.rows[0] as Row | undefined;
+    const sequence = seqRs.rows.map((r) => String(r.result) as MatchResult);
     let best = 0;
     let run = 0;
     for (const r of sequence) {
@@ -591,10 +689,11 @@ export class AccountStore {
 
   // ─── Achievements ──────────────────────────────────────────────────────────
 
-  listAchievements(userId: string): UserAchievementRow[] {
-    const rows = this.db
-      .prepare('SELECT achievement_id, unlocked_at, reward_claimed, reward_coins FROM user_achievements WHERE user_id = ? ORDER BY unlocked_at ASC')
-      .all(userId) as Row[];
+  async listAchievements(userId: string): Promise<UserAchievementRow[]> {
+    const rows = await this.all(
+      'SELECT achievement_id, unlocked_at, reward_claimed, reward_coins FROM user_achievements WHERE user_id = ? ORDER BY unlocked_at ASC',
+      [userId],
+    );
     return rows.map(toUserAchievement);
   }
 
@@ -604,30 +703,32 @@ export class AccountStore {
    * true (in the same transaction), so a reward can't be paid twice even if two
    * checks race. `rewardCoins` is recorded for reference; the reward service pays.
    */
-  insertAchievementUnlock(userId: string, achievementId: string, rewardCoins: number): boolean {
-    const res = this.db
-      .prepare('INSERT OR IGNORE INTO user_achievements (user_id, achievement_id, unlocked_at, reward_claimed, reward_coins) VALUES (?, ?, ?, 1, ?)')
-      .run(userId, achievementId, this.now(), Math.max(0, Math.floor(rewardCoins)));
-    return Number(res.changes) > 0;
+  async insertAchievementUnlock(userId: string, achievementId: string, rewardCoins: number): Promise<boolean> {
+    const added = await this.changes(
+      'INSERT OR IGNORE INTO user_achievements (user_id, achievement_id, unlocked_at, reward_claimed, reward_coins) VALUES (?, ?, ?, 1, ?)',
+      [userId, achievementId, this.now(), Math.max(0, Math.floor(rewardCoins))],
+    );
+    return added > 0;
   }
 
   /** Only the reward service calls this. */
-  addCoins(userId: string, amount: number) {
-    this.db.prepare('UPDATE users SET coins = coins + ? WHERE id = ?').run(Math.floor(amount), userId);
+  async addCoins(userId: string, amount: number) {
+    await this.execute('UPDATE users SET coins = coins + ? WHERE id = ?', [Math.floor(amount), userId]);
   }
 
-  coins(userId: string): number {
-    const row = this.db.prepare('SELECT coins FROM users WHERE id = ?').get(userId) as { coins: number } | undefined;
+  async coins(userId: string): Promise<number> {
+    const row = await this.one('SELECT coins FROM users WHERE id = ?', [userId]);
     return Number(row?.coins ?? 0);
   }
 
   // ─── Titles ────────────────────────────────────────────────────────────────
 
   /** Oldest first. */
-  listTitles(userId: string): UserTitleRow[] {
-    const rows = this.db
-      .prepare('SELECT title_id, unlocked_at, source_type, source_id FROM user_titles WHERE user_id = ? ORDER BY unlocked_at ASC, title_id ASC')
-      .all(userId) as Row[];
+  async listTitles(userId: string): Promise<UserTitleRow[]> {
+    const rows = await this.all(
+      'SELECT title_id, unlocked_at, source_type, source_id FROM user_titles WHERE user_id = ? ORDER BY unlocked_at ASC, title_id ASC',
+      [userId],
+    );
     return rows.map((r) => ({
       titleId: String(r.title_id),
       unlockedAt: Number(r.unlocked_at),
@@ -637,11 +738,15 @@ export class AccountStore {
   }
 
   /** Idempotent: returns whether the title was newly added. Only the reward service calls this. */
-  grantTitle(userId: string, titleId: string, source: RewardSource): boolean {
-    const res = this.db
-      .prepare('INSERT OR IGNORE INTO user_titles (user_id, title_id, unlocked_at, source_type, source_id) VALUES (?, ?, ?, ?, ?)')
-      .run(userId, titleId, this.now(), source.type, source.id);
-    return Number(res.changes) > 0;
+  async grantTitle(userId: string, titleId: string, source: RewardSource): Promise<boolean> {
+    const added = await this.changes('INSERT OR IGNORE INTO user_titles (user_id, title_id, unlocked_at, source_type, source_id) VALUES (?, ?, ?, ?, ?)', [
+      userId,
+      titleId,
+      this.now(),
+      source.type,
+      source.id,
+    ]);
+    return added > 0;
   }
 
   /**
@@ -649,28 +754,32 @@ export class AccountStore {
    * is part of the UPDATE, so it can't be skipped or raced. Returns false when
    * the user doesn't own the title (or doesn't exist).
    */
-  setEquippedTitle(userId: string, titleId: string | null): boolean {
-    const res =
+  async setEquippedTitle(userId: string, titleId: string | null): Promise<boolean> {
+    const changed =
       titleId === null
-        ? this.db.prepare('UPDATE users SET equipped_title_id = NULL WHERE id = ?').run(userId)
-        : this.db
-            .prepare('UPDATE users SET equipped_title_id = ? WHERE id = ? AND EXISTS (SELECT 1 FROM user_titles WHERE user_id = ? AND title_id = ?)')
-            .run(titleId, userId, userId, titleId);
-    return Number(res.changes) > 0;
+        ? await this.changes('UPDATE users SET equipped_title_id = NULL WHERE id = ?', [userId])
+        : await this.changes('UPDATE users SET equipped_title_id = ? WHERE id = ? AND EXISTS (SELECT 1 FROM user_titles WHERE user_id = ? AND title_id = ?)', [
+            titleId,
+            userId,
+            userId,
+            titleId,
+          ]);
+    return changed > 0;
   }
 
-  equippedTitleId(userId: string): string | null {
-    const row = this.db.prepare('SELECT equipped_title_id FROM users WHERE id = ?').get(userId) as Row | undefined;
+  async equippedTitleId(userId: string): Promise<string | null> {
+    const row = await this.one('SELECT equipped_title_id FROM users WHERE id = ?', [userId]);
     return row ? strOrNull(row.equipped_title_id) : null;
   }
 
   // ─── Cosmetics (name styles, …) ────────────────────────────────────────────
 
   /** Owned items of one kind, oldest first. */
-  listCosmetics(userId: string, kind: CosmeticKind): UserCosmeticRow[] {
-    const rows = this.db
-      .prepare('SELECT item_id, acquired_at, source_type, source_id, cost FROM user_cosmetics WHERE user_id = ? AND kind = ? ORDER BY acquired_at ASC, item_id ASC')
-      .all(userId, kind) as Row[];
+  async listCosmetics(userId: string, kind: CosmeticKind): Promise<UserCosmeticRow[]> {
+    const rows = await this.all(
+      'SELECT item_id, acquired_at, source_type, source_id, cost FROM user_cosmetics WHERE user_id = ? AND kind = ? ORDER BY acquired_at ASC, item_id ASC',
+      [userId, kind],
+    );
     return rows.map((r) => ({
       itemId: String(r.item_id),
       acquiredAt: Number(r.acquired_at),
@@ -681,11 +790,12 @@ export class AccountStore {
   }
 
   /** Idempotent: returns whether the item was newly added. Only the reward service calls this. */
-  grantCosmetic(userId: string, kind: CosmeticKind, itemId: string, source: RewardSource): boolean {
-    const res = this.db
-      .prepare('INSERT OR IGNORE INTO user_cosmetics (user_id, kind, item_id, acquired_at, source_type, source_id, cost) VALUES (?, ?, ?, ?, ?, ?, 0)')
-      .run(userId, kind, itemId, this.now(), source.type, source.id);
-    return Number(res.changes) > 0;
+  async grantCosmetic(userId: string, kind: CosmeticKind, itemId: string, source: RewardSource): Promise<boolean> {
+    const added = await this.changes(
+      'INSERT OR IGNORE INTO user_cosmetics (user_id, kind, item_id, acquired_at, source_type, source_id, cost) VALUES (?, ?, ?, ?, ?, ?, 0)',
+      [userId, kind, itemId, this.now(), source.type, source.id],
+    );
+    return added > 0;
   }
 
   /**
@@ -695,16 +805,17 @@ export class AccountStore {
    * click nor two racing requests can buy twice or push the balance below 0.
    * `price` must come from the catalogue, never from a request.
    */
-  purchaseCosmetic(userId: string, kind: CosmeticKind, itemId: string, price: number): PurchaseOutcome {
+  purchaseCosmetic(userId: string, kind: CosmeticKind, itemId: string, price: number): Promise<PurchaseOutcome> {
     const cost = Math.max(0, Math.floor(price));
-    return this.transaction((): PurchaseOutcome => {
-      const owned = this.db.prepare('SELECT 1 FROM user_cosmetics WHERE user_id = ? AND kind = ? AND item_id = ?').get(userId, kind, itemId);
+    return this.transaction(async (): Promise<PurchaseOutcome> => {
+      const owned = await this.one('SELECT 1 FROM user_cosmetics WHERE user_id = ? AND kind = ? AND item_id = ?', [userId, kind, itemId]);
       if (owned) return 'ALREADY_OWNED';
-      const paid = this.db.prepare('UPDATE users SET coins = coins - ? WHERE id = ? AND coins >= ?').run(cost, userId, cost);
-      if (Number(paid.changes) === 0) return 'NOT_ENOUGH_COIN';
-      this.db
-        .prepare('INSERT INTO user_cosmetics (user_id, kind, item_id, acquired_at, source_type, source_id, cost) VALUES (?, ?, ?, ?, ?, NULL, ?)')
-        .run(userId, kind, itemId, this.now(), 'coin', cost);
+      const paid = await this.changes('UPDATE users SET coins = coins - ? WHERE id = ? AND coins >= ?', [cost, userId, cost]);
+      if (paid === 0) return 'NOT_ENOUGH_COIN';
+      await this.execute(
+        'INSERT INTO user_cosmetics (user_id, kind, item_id, acquired_at, source_type, source_id, cost) VALUES (?, ?, ?, ?, ?, NULL, ?)',
+        [userId, kind, itemId, this.now(), 'coin', cost],
+      );
       return 'OK';
     });
   }
@@ -713,16 +824,16 @@ export class AccountStore {
    * Stores the equipped name style (null = default). Callers check ownership
    * first (NameStyleService); reads re-check it anyway (USER_SELECT).
    */
-  setNameStyle(userId: string, nameStyleId: string | null) {
-    this.db.prepare('UPDATE users SET name_style_id = ?, updated_at = ? WHERE id = ?').run(nameStyleId, this.now(), userId);
+  async setNameStyle(userId: string, nameStyleId: string | null) {
+    await this.execute('UPDATE users SET name_style_id = ?, updated_at = ? WHERE id = ?', [nameStyleId, this.now(), userId]);
   }
 
   /**
    * Stores the equipped avatar frame (null = `frame_default`). Callers check
    * ownership first (AvatarFrameService); reads re-check it anyway (USER_SELECT).
    */
-  setAvatarFrame(userId: string, avatarFrameId: string | null) {
-    this.db.prepare('UPDATE users SET avatar_frame_id = ?, updated_at = ? WHERE id = ?').run(avatarFrameId, this.now(), userId);
+  async setAvatarFrame(userId: string, avatarFrameId: string | null) {
+    await this.execute('UPDATE users SET avatar_frame_id = ?, updated_at = ? WHERE id = ?', [avatarFrameId, this.now(), userId]);
   }
 }
 
@@ -736,9 +847,15 @@ function toUserAchievement(r: Row): UserAchievementRow {
 }
 
 function isUniqueViolation(err: unknown) {
-  const e = err as { errcode?: number; message?: string };
+  const e = err as { extendedCode?: string; rawCode?: number; message?: string };
   // SQLITE_CONSTRAINT_UNIQUE = 2067, SQLITE_CONSTRAINT_PRIMARYKEY = 1555.
-  return e?.errcode === 2067 || e?.errcode === 1555 || /UNIQUE constraint failed/.test(e?.message ?? '');
+  return (
+    e?.extendedCode === 'SQLITE_CONSTRAINT_UNIQUE' ||
+    e?.extendedCode === 'SQLITE_CONSTRAINT_PRIMARYKEY' ||
+    e?.rawCode === 2067 ||
+    e?.rawCode === 1555 ||
+    /UNIQUE constraint failed/.test(e?.message ?? '')
+  );
 }
 
 function toUser(r: Row | undefined): UserRow | null {
@@ -760,9 +877,9 @@ function toUser(r: Row | undefined): UserRow | null {
   };
 }
 
-const csv = (v: SQLInputValue) => (v == null || v === '' ? [] : String(v).split(',').map(Number));
-const numOrNull = (v: SQLInputValue) => (v == null ? null : Number(v));
-const strOrNull = (v: SQLInputValue) => (v == null ? null : String(v));
+const csv = (v: Value) => (v == null || v === '' ? [] : String(v).split(',').map(Number));
+const numOrNull = (v: Value) => (v == null ? null : Number(v));
+const strOrNull = (v: Value) => (v == null ? null : String(v));
 
 function toMatch(r: Row): StoredMatch {
   return {

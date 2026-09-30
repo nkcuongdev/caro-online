@@ -50,9 +50,9 @@ function game(extra: Partial<MatchRecord> = {}): MatchRecord {
 }
 
 /** The error code a call throws. */
-function codeOf(fn: () => unknown): string {
+async function codeOf(fn: () => Promise<unknown>): Promise<string> {
   try {
-    fn();
+    await fn();
   } catch (err) {
     if (err instanceof NameStyleError) return err.code;
     throw err;
@@ -112,160 +112,162 @@ describe('name style ownership, coins and achievements', () => {
   let achievements: AchievementManager;
   let userId: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store = new AccountStore(':memory:');
     styles = new NameStyleService(store, links);
     achievements = new AchievementManager(store);
-    userId = store.createUser({ email: 'n@example.com', passwordHash: 'x', nickname: 'N', avatar: null })!.id;
+    userId = (await store.createUser({ email: 'n@example.com', passwordHash: 'x', nickname: 'N', avatar: null }))!.id;
   });
-  afterEach(() => store.close());
+  afterEach(async () => {
+    await store.close();
+  });
 
-  const view = (id: string) => styles.overview(userId).styles.find((s) => s.id === id)!;
+  const view = async (id: string) => (await styles.overview(userId)).styles.find((s) => s.id === id)!;
 
-  it('a new account owns only default and wears it', () => {
-    assert.deepEqual([...styles.ownedIds(userId)], ['default']);
-    assert.equal(styles.equippedFor(userId), 'default');
-    assert.equal(store.getUser(userId)!.nameStyleId, null);
-    const o = styles.overview(userId);
+  it('a new account owns only default and wears it', async () => {
+    assert.deepEqual([...(await styles.ownedIds(userId))], ['default']);
+    assert.equal(await styles.equippedFor(userId), 'default');
+    assert.equal((await store.getUser(userId))!.nameStyleId, null);
+    const o = await styles.overview(userId);
     assert.equal(o.equipped, 'default');
     assert.deepEqual(o.styles.filter((s) => s.owned).map((s) => s.id), ['default']);
-    assert.equal(styles.equippedFor(null), 'default', 'guests');
+    assert.equal(await styles.equippedFor(null), 'default', 'guests');
   });
 
-  it('refuses to equip what the player does not own, with the reason', () => {
-    assert.equal(codeOf(() => styles.equip(userId, 'ocean_blue')), 'STYLE_NOT_OWNED');
-    assert.equal(codeOf(() => styles.equip(userId, 'galaxy')), 'ACHIEVEMENT_REQUIRED');
-    assert.equal(codeOf(() => styles.equip(userId, 'void')), 'STYLE_LOCKED');
-    assert.equal(codeOf(() => styles.equip(userId, 'nope')), 'STYLE_NOT_FOUND');
-    assert.equal(codeOf(() => styles.equip(userId, '<b>x</b>')), 'INVALID_STYLE');
-    assert.equal(codeOf(() => styles.equip(userId, { id: 'galaxy' })), 'INVALID_STYLE');
-    assert.equal(styles.equippedFor(userId), 'default');
+  it('refuses to equip what the player does not own, with the reason', async () => {
+    assert.equal(await codeOf(() => styles.equip(userId, 'ocean_blue')), 'STYLE_NOT_OWNED');
+    assert.equal(await codeOf(() => styles.equip(userId, 'galaxy')), 'ACHIEVEMENT_REQUIRED');
+    assert.equal(await codeOf(() => styles.equip(userId, 'void')), 'STYLE_LOCKED');
+    assert.equal(await codeOf(() => styles.equip(userId, 'nope')), 'STYLE_NOT_FOUND');
+    assert.equal(await codeOf(() => styles.equip(userId, '<b>x</b>')), 'INVALID_STYLE');
+    assert.equal(await codeOf(() => styles.equip(userId, { id: 'galaxy' })), 'INVALID_STYLE');
+    assert.equal(await styles.equippedFor(userId), 'default');
   });
 
-  it('buys with enough coins, then equips; the price comes from the catalogue', () => {
-    store.addCoins(userId, 600);
-    const bought = styles.buy(userId, 'ocean_blue');
+  it('buys with enough coins, then equips; the price comes from the catalogue', async () => {
+    await store.addCoins(userId, 600);
+    const bought = await styles.buy(userId, 'ocean_blue');
     assert.equal(bought.coins, 100);
     assert.equal(bought.style.owned, true);
-    assert.equal(store.coins(userId), 100);
-    assert.equal(store.listCosmetics(userId, 'name_style')[0].cost, 500);
+    assert.equal(await store.coins(userId), 100);
+    assert.equal((await store.listCosmetics(userId, 'name_style'))[0].cost, 500);
 
     const events: [string, string][] = [];
     styles.onEquipped((u, s) => events.push([u, s]));
-    assert.deepEqual(styles.equip(userId, 'ocean_blue'), { equipped: 'ocean_blue' });
-    assert.equal(styles.equippedFor(userId), 'ocean_blue');
-    assert.equal(view('ocean_blue').equipped, true);
-    styles.equip(userId, 'ocean_blue'); // no change, no event
-    styles.equip(userId, 'default');
-    assert.equal(store.getUser(userId)!.nameStyleId, null, 'default is stored as NULL');
+    assert.deepEqual(await styles.equip(userId, 'ocean_blue'), { equipped: 'ocean_blue' });
+    assert.equal(await styles.equippedFor(userId), 'ocean_blue');
+    assert.equal((await view('ocean_blue')).equipped, true);
+    await styles.equip(userId, 'ocean_blue'); // no change, no event
+    await styles.equip(userId, 'default');
+    assert.equal((await store.getUser(userId))!.nameStyleId, null, 'default is stored as NULL');
     assert.deepEqual(events, [
       [userId, 'ocean_blue'],
       [userId, 'default'],
     ]);
   });
 
-  it('refuses a purchase without enough coins and changes nothing', () => {
-    store.addCoins(userId, 499);
-    assert.equal(codeOf(() => styles.buy(userId, 'ocean_blue')), 'NOT_ENOUGH_COIN');
-    assert.equal(store.coins(userId), 499);
-    assert.equal(view('ocean_blue').owned, false);
+  it('refuses a purchase without enough coins and changes nothing', async () => {
+    await store.addCoins(userId, 499);
+    assert.equal(await codeOf(() => styles.buy(userId, 'ocean_blue')), 'NOT_ENOUGH_COIN');
+    assert.equal(await store.coins(userId), 499);
+    assert.equal((await view('ocean_blue')).owned, false);
   });
 
-  it('never charges twice: a second purchase is ALREADY_OWNED, and the store refuses a raced one', () => {
-    store.addCoins(userId, 5000);
-    styles.buy(userId, 'mystic_gradient');
-    assert.equal(codeOf(() => styles.buy(userId, 'mystic_gradient')), 'ALREADY_OWNED');
-    assert.equal(store.purchaseCosmetic(userId, 'name_style', 'mystic_gradient', 1500), 'ALREADY_OWNED', 'even past the service check');
-    assert.equal(store.coins(userId), 3500);
-    assert.equal(codeOf(() => styles.buy(userId, 'default')), 'ALREADY_OWNED');
+  it('never charges twice: a second purchase is ALREADY_OWNED, and the store refuses a raced one', async () => {
+    await store.addCoins(userId, 5000);
+    await styles.buy(userId, 'mystic_gradient');
+    assert.equal(await codeOf(() => styles.buy(userId, 'mystic_gradient')), 'ALREADY_OWNED');
+    assert.equal(await store.purchaseCosmetic(userId, 'name_style', 'mystic_gradient', 1500), 'ALREADY_OWNED', 'even past the service check');
+    assert.equal(await store.coins(userId), 3500);
+    assert.equal(await codeOf(() => styles.buy(userId, 'default')), 'ALREADY_OWNED');
   });
 
-  it('cannot buy achievement, secret or unknown styles, whatever the balance', () => {
-    store.addCoins(userId, 1_000_000);
-    assert.equal(codeOf(() => styles.buy(userId, 'galaxy')), 'ACHIEVEMENT_REQUIRED');
-    assert.equal(codeOf(() => styles.buy(userId, 'void')), 'STYLE_LOCKED');
-    assert.equal(codeOf(() => styles.buy(userId, 'free_gold')), 'STYLE_NOT_FOUND');
-    assert.equal(store.coins(userId), 1_000_000);
+  it('cannot buy achievement, secret or unknown styles, whatever the balance', async () => {
+    await store.addCoins(userId, 1_000_000);
+    assert.equal(await codeOf(() => styles.buy(userId, 'galaxy')), 'ACHIEVEMENT_REQUIRED');
+    assert.equal(await codeOf(() => styles.buy(userId, 'void')), 'STYLE_LOCKED');
+    assert.equal(await codeOf(() => styles.buy(userId, 'free_gold')), 'STYLE_NOT_FOUND');
+    assert.equal(await store.coins(userId), 1_000_000);
   });
 
-  it('the balance never goes negative in the store either', () => {
-    store.addCoins(userId, 10);
-    assert.equal(store.purchaseCosmetic(userId, 'name_style', 'ocean_blue', 500), 'NOT_ENOUGH_COIN');
-    assert.equal(store.coins(userId), 10);
+  it('the balance never goes negative in the store either', async () => {
+    await store.addCoins(userId, 10);
+    assert.equal(await store.purchaseCosmetic(userId, 'name_style', 'ocean_blue', 500), 'NOT_ENOUGH_COIN');
+    assert.equal(await store.coins(userId), 10);
   });
 
-  it('an achievement grants its style exactly once, and re-checks never duplicate it', () => {
-    for (let i = 0; i < 20; i++) store.recordMatch(userId, game({ mode: 'bot', opponentIsBot: true, botDifficulty: 'easy' }));
-    const { unlocked } = achievements.evaluate(userId);
+  it('an achievement grants its style exactly once, and re-checks never duplicate it', async () => {
+    for (let i = 0; i < 20; i++) await store.recordMatch(userId, game({ mode: 'bot', opponentIsBot: true, botDifficulty: 'easy' }));
+    const { unlocked } = await achievements.evaluate(userId);
     const bot20 = unlocked.find((a) => a.id === 'bot-20')!;
     assert.deepEqual(
       bot20.rewards.find((r) => r.type === 'nameStyle'),
       { type: 'nameStyle', nameStyle: { id: 'ice_glow', name: getNameStyle('ice_glow')!.name, rarity: 'rare' } },
     );
-    assert.equal(view('ice_glow').owned, true);
-    assert.deepEqual(view('ice_glow').achievement, { id: 'bot-20', name: 'Thợ săn AI' });
-    for (let i = 0; i < 3; i++) achievements.evaluate(userId);
-    achievements.overview(userId);
-    assert.equal(store.listCosmetics(userId, 'name_style').filter((c) => c.itemId === 'ice_glow').length, 1);
-    styles.equip(userId, 'ice_glow');
-    assert.equal(styles.equippedFor(userId), 'ice_glow');
+    assert.equal((await view('ice_glow')).owned, true);
+    assert.deepEqual((await view('ice_glow')).achievement, { id: 'bot-20', name: 'Thợ săn AI' });
+    for (let i = 0; i < 3; i++) await achievements.evaluate(userId);
+    await achievements.overview(userId);
+    assert.equal((await store.listCosmetics(userId, 'name_style')).filter((c) => c.itemId === 'ice_glow').length, 1);
+    await styles.equip(userId, 'ice_glow');
+    assert.equal(await styles.equippedFor(userId), 'ice_glow');
   });
 
-  it('backfills the style for an achievement completed before it carried one, once, without paying coins again', () => {
-    for (let i = 0; i < 20; i++) store.recordMatch(userId, game({ mode: 'bot', opponentIsBot: true, botDifficulty: 'easy' }));
+  it('backfills the style for an achievement completed before it carried one, once, without paying coins again', async () => {
+    for (let i = 0; i < 20; i++) await store.recordMatch(userId, game({ mode: 'bot', opponentIsBot: true, botDifficulty: 'easy' }));
     // As if bot-20 had been unlocked (and paid) before name styles existed.
-    store.transaction(() => {
+    await store.transaction(async () => {
       for (const d of ACHIEVEMENTS.filter((a) => ['games-1', 'games-10', 'wins-1', 'wins-10', 'streak-3', 'streak-5', 'streak-10', 'streak-20', 'bot-1', 'bot-20'].includes(a.id))) {
-        store.insertAchievementUnlock(userId, d.id, 0);
+        await store.insertAchievementUnlock(userId, d.id, 0);
       }
     });
-    const coins = store.coins(userId);
-    achievements.evaluate(userId);
-    assert.equal(view('ice_glow').owned, true);
-    assert.equal(store.coins(userId), coins);
-    achievements.evaluate(userId);
-    assert.equal(store.listCosmetics(userId, 'name_style').length, 1);
+    const coins = await store.coins(userId);
+    await achievements.evaluate(userId);
+    assert.equal((await view('ice_glow')).owned, true);
+    assert.equal(await store.coins(userId), coins);
+    await achievements.evaluate(userId);
+    assert.equal((await store.listCosmetics(userId, 'name_style')).length, 1);
   });
 
-  it('keeps the secret style secret until owned, then it works like any other', () => {
+  it('keeps the secret style secret until owned, then it works like any other', async () => {
     const leak = (x: unknown) => JSON.stringify(x);
-    const masked = view('void');
+    const masked = await view('void');
     assert.equal(masked.secret, true);
     assert.equal(masked.name, '???');
     assert.equal(masked.unlock, 'secret');
     assert.equal(masked.price, null);
     assert.equal(masked.achievement, null);
-    for (const payload of [styles.overview(userId), styles.catalogue(), achievements.overview(userId)]) {
+    for (const payload of [await styles.overview(userId), styles.catalogue(), await achievements.overview(userId)]) {
       assert.ok(!leak(payload).includes('Hư Không'), 'the name stays hidden');
       assert.ok(!leak(payload).includes(getNameStyle('void')!.description), 'the description stays hidden');
     }
-    const byStyle = styles.overview(userId).styles.find((s) => s.id === 'void')!;
+    const byStyle = (await styles.overview(userId)).styles.find((s) => s.id === 'void')!;
     assert.ok(!leak(byStyle).includes('perfect-five'), 'the unlocking achievement is not named');
 
     // X wins with its 5th move: the hidden "perfect-five" achievement unlocks and grants the style.
-    store.recordMatch(userId, game({ reason: 'five', moves: [0, 20, 1, 21, 2, 22, 3, 23, 4] }));
-    const { unlocked } = achievements.evaluate(userId);
+    await store.recordMatch(userId, game({ reason: 'five', moves: [0, 20, 1, 21, 2, 22, 3, 23, 4] }));
+    const { unlocked } = await achievements.evaluate(userId);
     assert.ok(unlocked.some((a) => a.id === 'perfect-five'));
-    const open = view('void');
+    const open = await view('void');
     assert.equal(open.secret, false);
     assert.equal(open.owned, true);
     assert.equal(open.name, 'Hư Không');
     assert.deepEqual(open.achievement, { id: 'perfect-five', name: 'Thần tốc' });
-    styles.equip(userId, 'void');
-    assert.equal(styles.equippedFor(userId), 'void');
+    await styles.equip(userId, 'void');
+    assert.equal(await styles.equippedFor(userId), 'void');
   });
 
-  it('falls back to default for stored ids that are unknown, retired or not owned', () => {
-    const db = store.open();
-    db.prepare("UPDATE users SET name_style_id = 'rainbow' WHERE id = ?").run(userId);
-    assert.equal(styles.equippedFor(userId), 'default', 'not owned: ignored');
+  it('falls back to default for stored ids that are unknown, retired or not owned', async () => {
+    const db = await store.open();
+    await db.execute({ sql: "UPDATE users SET name_style_id = 'rainbow' WHERE id = ?", args: [userId] });
+    assert.equal(await styles.equippedFor(userId), 'default', 'not owned: ignored');
 
-    db.prepare("INSERT INTO user_cosmetics (user_id, kind, item_id, acquired_at, source_type) VALUES (?, 'name_style', 'retired_style', 0, 'event')").run(userId);
-    db.prepare("UPDATE users SET name_style_id = 'retired_style' WHERE id = ?").run(userId);
-    assert.equal(store.getUser(userId)!.nameStyleId, 'retired_style');
-    assert.equal(styles.equippedFor(userId), 'default', 'owned but gone from the catalogue');
-    assert.ok(!styles.ownedIds(userId).has('retired_style'));
-    assert.equal(styles.overview(userId).equipped, 'default');
+    await db.execute({ sql: "INSERT INTO user_cosmetics (user_id, kind, item_id, acquired_at, source_type) VALUES (?, 'name_style', 'retired_style', 0, 'event')", args: [userId] });
+    await db.execute({ sql: "UPDATE users SET name_style_id = 'retired_style' WHERE id = ?", args: [userId] });
+    assert.equal((await store.getUser(userId))!.nameStyleId, 'retired_style');
+    assert.equal(await styles.equippedFor(userId), 'default', 'owned but gone from the catalogue');
+    assert.ok(!(await styles.ownedIds(userId)).has('retired_style'));
+    assert.equal((await styles.overview(userId)).equipped, 'default');
   });
 });
 
@@ -274,31 +276,40 @@ describe('name styles: existing databases', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'caro-ns-'));
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => {
+    // libsql keeps a closed database's file open until its handle is garbage
+    // collected, and Windows refuses to delete it meanwhile. A leftover temp dir is harmless.
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (err) {
+      if (!['EPERM', 'EBUSY'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
+    }
+  });
 
-  it('an account from before name styles migrates cleanly and wears default', () => {
+  it('an account from before name styles migrates cleanly and wears default', async () => {
     const path = join(dir, 'caro.db');
     let store = new AccountStore(path);
-    const userId = store.createUser({ email: 'old@example.com', passwordHash: 'x', nickname: 'Old', avatar: null })!.id;
-    store.addCoins(userId, 700);
-    store.close();
+    const userId = (await store.createUser({ email: 'old@example.com', passwordHash: 'x', nickname: 'Old', avatar: null }))!.id;
+    await store.addCoins(userId, 700);
+    await store.close();
     const raw = new DatabaseSync(path);
-    raw.exec('ALTER TABLE users DROP COLUMN avatar_frame_id; DROP TABLE user_cosmetics; ALTER TABLE users DROP COLUMN name_style_id; PRAGMA user_version = 3;');
+    // The synchronous store kept the schema version in user_version only, with no row in meta.
+    raw.exec("ALTER TABLE users DROP COLUMN avatar_frame_id; DROP TABLE user_cosmetics; ALTER TABLE users DROP COLUMN name_style_id; DELETE FROM meta WHERE key = 'schema_version'; PRAGMA user_version = 3;");
     raw.close();
 
     store = new AccountStore(path);
-    const user = store.getUser(userId)!;
+    const user = (await store.getUser(userId))!;
     assert.equal(user.nameStyleId, null);
     assert.equal(user.coins, 700);
     const styles = new NameStyleService(store, links);
-    assert.equal(styles.equippedFor(userId), 'default');
-    styles.buy(userId, 'emerald');
-    styles.equip(userId, 'emerald');
-    store.close();
+    assert.equal(await styles.equippedFor(userId), 'default');
+    await styles.buy(userId, 'emerald');
+    await styles.equip(userId, 'emerald');
+    await store.close();
 
     store = new AccountStore(path);
-    assert.equal(new NameStyleService(store, links).equippedFor(userId), 'emerald', 'survives a restart');
-    store.close();
+    assert.equal(await new NameStyleService(store, links).equippedFor(userId), 'emerald', 'survives a restart');
+    await store.close();
   });
 });
 
@@ -365,7 +376,7 @@ describe('name styles over the network', () => {
   /** A registered account with `coins` in the bank. */
   async function account(email: string, coins = 0) {
     const reg = await api('POST', '/api/auth/register', { email, password: 'correct horse', nickname: email.split('@')[0] });
-    if (coins) server!.accounts.addCoins(reg.body.user.id, coins);
+    if (coins) await server!.accounts.addCoins(reg.body.user.id, coins);
     return { token: reg.body.token as string, id: reg.body.user.id as string };
   }
 

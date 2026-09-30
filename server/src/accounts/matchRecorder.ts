@@ -17,7 +17,7 @@ export interface MatchRecorderLimits {
 }
 
 /** Called after a live game was added to an account's history (not for duplicates, not for claims). */
-export type MatchRecordedListener = (userId: string, record: MatchRecord) => void;
+export type MatchRecordedListener = (userId: string, record: MatchRecord) => void | Promise<void>;
 
 export const DEFAULT_RECORDER_LIMITS: MatchRecorderLimits = { pendingTtlMs: 6 * 60 * 60_000, maxPerSeat: 30, maxTotal: 5_000 };
 
@@ -34,6 +34,7 @@ export class MatchRecorder {
   private pending = new Map<string, Pending[]>();
   private total = 0;
   private recordedListeners: MatchRecordedListener[] = [];
+  private readonly inFlight = new Set<Promise<unknown>>();
 
   constructor(
     private readonly store: AccountStore,
@@ -42,11 +43,8 @@ export class MatchRecorder {
     private readonly now: () => number = Date.now,
   ) {
     rooms.onRoomFinished((room, result, seats) => {
-      try {
-        this.onFinished(room, result, seats);
-      } catch (err) {
-        console.error('[accounts] recording a match failed', err);
-      }
+      // Built synchronously from the room as it is now; only the database writes wait.
+      this.track(this.onFinished(room, result, seats).catch((err) => console.error('[accounts] recording a match failed', err)));
     });
   }
 
@@ -54,8 +52,18 @@ export class MatchRecorder {
     this.recordedListeners.push(listener);
   }
 
+  /** Resolves once every game finished so far is written and its listeners ran (tests, shutdown). */
+  async idle() {
+    while (this.inFlight.size) await Promise.all([...this.inFlight]);
+  }
+
+  private track(work: Promise<unknown>) {
+    this.inFlight.add(work);
+    void work.finally(() => this.inFlight.delete(work));
+  }
+
   /** Moves a guest's recent games into an account. Returns how many were added. */
-  claim(tokens: string[], userId: string): number {
+  async claim(tokens: string[], userId: string): Promise<number> {
     const mine = new Set(tokens);
     let added = 0;
     for (const token of mine) {
@@ -66,7 +74,7 @@ export class MatchRecorder {
       for (const p of list) {
         if (p.expiresAt <= this.now()) continue;
         if ((p.opponentToken && mine.has(p.opponentToken)) || p.record.opponentUserId === userId) continue;
-        if (this.store.recordMatch(userId, p.record)) added++;
+        if (await this.store.recordMatch(userId, p.record)) added++;
       }
     }
     return added;
@@ -82,9 +90,10 @@ export class MatchRecorder {
     }
   }
 
-  private onFinished(room: Room, result: FinishedResult, seats: FinishedSeat[]) {
+  private async onFinished(room: Room, result: FinishedResult, seats: FinishedSeat[]) {
     const game = room.game;
     if (!game) return;
+    const writes: Promise<void>[] = [];
     const humans = seats.filter((s) => !s.isBot && s.mark);
     for (const seat of humans) {
       const opponent = seats.find((s) => s.id !== seat.id) ?? null;
@@ -118,17 +127,19 @@ export class MatchRecorder {
       if (seat.userId) {
         // One account on both seats (two tabs) isn't a real game.
         if (opponent?.userId === seat.userId) continue;
-        if (this.store.recordMatch(seat.userId, record)) this.notifyRecorded(seat.userId, record);
+        const userId = seat.userId;
+        writes.push(this.store.recordMatch(userId, record).then((added) => (added ? this.notifyRecorded(userId, record) : undefined)));
       } else {
         this.remember(seat.token, { record, opponentToken: opponent && !opponent.isBot ? opponent.token : null, expiresAt: this.now() + this.limits.pendingTtlMs });
       }
     }
+    await Promise.all(writes);
   }
 
-  private notifyRecorded(userId: string, record: MatchRecord) {
+  private async notifyRecorded(userId: string, record: MatchRecord) {
     for (const listener of this.recordedListeners) {
       try {
-        listener(userId, record);
+        await listener(userId, record);
       } catch (err) {
         console.error('[accounts] match-recorded listener failed', err);
       }

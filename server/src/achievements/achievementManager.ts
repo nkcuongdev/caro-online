@@ -154,32 +154,33 @@ export class AchievementManager {
    * achievement is unlocked (and paid) once, and a title is owned once.
    * Pass `stats` when the caller already computed them.
    */
-  evaluate(userId: string, stats: PlayerStats = this.store.stats(userId)): EvaluateResult {
-    const rows = this.store.listAchievements(userId);
+  async evaluate(userId: string, knownStats?: PlayerStats): Promise<EvaluateResult> {
+    const stats = knownStats ?? (await this.store.stats(userId));
+    const rows = await this.store.listAchievements(userId);
     const owned = new Set(rows.map((r) => r.achievementId));
     const due = findNewUnlocks(this.defs, toAchievementStats(stats), owned);
     const earlier = rows.flatMap((r) => (this.byId.get(r.achievementId)?.rewards ?? []).map((reward) => ({ reward, source: r.achievementId })));
-    const missing = this.rewards.missing(userId, earlier.map((e) => e.reward));
+    const missing = await this.rewards.missing(userId, earlier.map((e) => e.reward));
     if (!due.length && !missing.length) return { unlocked: [], restoredTitles: [], rows };
 
-    const { added, restored } = this.store.transaction(() => {
+    const { added, restored } = await this.store.transaction(async () => {
       const added: AchievementDefinition[] = [];
       for (const def of due) {
-        if (!this.store.insertAchievementUnlock(userId, def.id, coinsIn(def.rewards))) continue; // a racing check got it first
-        this.rewards.grantAll(userId, def.rewards, { type: 'achievement', id: def.id });
+        if (!(await this.store.insertAchievementUnlock(userId, def.id, coinsIn(def.rewards)))) continue; // a racing check got it first
+        await this.rewards.grantAll(userId, def.rewards, { type: 'achievement', id: def.id });
         added.push(def);
       }
       const restored: string[] = [];
       for (const reward of missing) {
         const source = earlier.find((e) => e.reward === reward)!.source;
         // Restored name styles need no announcement: the collection page shows them as owned.
-        if (this.rewards.grant(userId, reward, { type: 'achievement', id: source }).granted && reward.type === 'title') restored.push(reward.titleId);
+        if ((await this.rewards.grant(userId, reward, { type: 'achievement', id: source })).granted && reward.type === 'title') restored.push(reward.titleId);
       }
       return { added, restored };
     });
 
     // Re-read so the caller sees the stored unlock times.
-    const fresh = added.length ? this.store.listAchievements(userId) : rows;
+    const fresh = added.length ? await this.store.listAchievements(userId) : rows;
     const at = new Map(fresh.map((r) => [r.achievementId, r.unlockedAt]));
     const unlocked = added.map(
       (def): UnlockedAchievement => ({
@@ -199,14 +200,20 @@ export class AchievementManager {
   }
 
   /** Every achievement with the player's progress. Runs a check first, so it doubles as the backfill. */
-  overview(userId: string): AchievementOverview {
-    const stats = this.store.stats(userId);
-    const { unlocked: newlyUnlocked, restoredTitles, rows } = this.evaluate(userId, stats);
+  async overview(userId: string): Promise<AchievementOverview> {
+    const stats = await this.store.stats(userId);
+    const { unlocked: newlyUnlocked, restoredTitles, rows } = await this.evaluate(userId, stats);
     const values = toAchievementStats(stats);
     const unlockedAt = new Map(rows.map((r) => [r.achievementId, r.unlockedAt]));
-    const ownedTitles = new Set(this.store.listTitles(userId).map((t) => t.titleId));
-    const ownedNameStyles = new Set(this.store.listCosmetics(userId, 'name_style').map((c) => c.itemId));
-    const ownedAvatarFrames = new Set(this.store.listCosmetics(userId, 'avatar_frame').map((c) => c.itemId));
+    const [titleRows, styleRows, frameRows, coins] = await Promise.all([
+      this.store.listTitles(userId),
+      this.store.listCosmetics(userId, 'name_style'),
+      this.store.listCosmetics(userId, 'avatar_frame'),
+      this.store.coins(userId),
+    ]);
+    const ownedTitles = new Set(titleRows.map((t) => t.titleId));
+    const ownedNameStyles = new Set(styleRows.map((c) => c.itemId));
+    const ownedAvatarFrames = new Set(frameRows.map((c) => c.itemId));
 
     const achievements = this.defs.map((def): AchievementView => {
       const at = unlockedAt.get(def.id) ?? null;
@@ -240,7 +247,7 @@ export class AchievementManager {
     return {
       achievements,
       summary: { unlocked: done, total: achievements.length, percentage: achievements.length ? Math.floor((done / achievements.length) * 100) : 0 },
-      coins: this.store.coins(userId),
+      coins,
       newlyUnlocked,
       restoredTitles,
     };

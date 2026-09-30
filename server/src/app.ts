@@ -18,8 +18,10 @@ import { createAvatarFrameRouter } from './cosmetics/avatarFrameRoutes.js';
 import { AvatarFrameService, avatarFrameLinks } from './cosmetics/avatarFrameService.js';
 import { createNameStyleRouter } from './cosmetics/nameStyleRoutes.js';
 import { NameStyleService, nameStyleLinks } from './cosmetics/nameStyleService.js';
+import { DEFAULT_AVATAR_FRAME } from './cosmetics/avatarFrames.js';
+import { DEFAULT_NAME_STYLE } from './cosmetics/nameStyles.js';
 import { MemoryRoomRepository, type RoomRepository } from './rooms/roomRepository.js';
-import { RoomManager } from './rooms/roomManager.js';
+import { RoomManager, type SeatCosmetics } from './rooms/roomManager.js';
 import { RewardService } from './rewards/rewardService.js';
 import { registerSocketHandlers } from './socket/handlers.js';
 import { createSocketSink, userChannel } from './socket/socketSink.js';
@@ -43,7 +45,7 @@ export function createCaroServer(
   repo: RoomRepository = new MemoryRoomRepository(),
   commsLimits?: Partial<CommsLimits> & { stands?: Partial<StandsLimits> },
   avatars: AvatarStorage = createAvatarStorage(cfg.avatars),
-  accounts: AccountStore = new AccountStore(cfg.accounts.databasePath),
+  accounts: AccountStore = new AccountStore(cfg.accounts.databasePath, undefined, cfg.accounts.databaseAuthToken),
 ): CaroServer {
   const originCheck = (origin: string | undefined, cb: (err: Error | null, ok?: boolean) => void) =>
     cb(null, isOriginAllowed(origin, cfg.clientOrigins));
@@ -77,38 +79,57 @@ export function createCaroServer(
   registerAchievementHooks(io, recorder, achievements, (userId) => accounts.coins(userId));
   const nameStyles = new NameStyleService(accounts, nameStyleLinks(achievements.definitions));
   const avatarFrames = new AvatarFrameService(accounts, avatarFrameLinks(achievements.definitions));
+
   // Seats show their account's equipped title, name style and avatar frame, and follow them live when they change.
-  manager.setCosmeticsResolver((userId) => ({
-    titleId: titles.equippedTitleId(userId),
-    nameStyle: nameStyles.equippedFor(userId),
-    avatarFrame: avatarFrames.equippedFor(userId),
-  }));
+  // Rooms and tournaments read them synchronously, so they come from this cache: signing in fills it (auth.identify
+  // waits for that), equipping updates it, and a miss answers the defaults, loads, then re-dresses the seats.
+  const cosmetics = createCosmeticsCache(
+    async (userId) => {
+      const [titleId, nameStyle, avatarFrame] = await Promise.all([titles.equippedTitleId(userId), nameStyles.equippedFor(userId), avatarFrames.equippedFor(userId)]);
+      return { titleId, nameStyle, avatarFrame };
+    },
+    (userId, c) => {
+      void manager.refreshCosmetics(userId);
+      void tournaments.refreshNameStyle(userId, c.nameStyle);
+      void tournaments.refreshAvatarFrame(userId, c.avatarFrame);
+      void tournaments.refreshTitle(userId, c.titleId);
+    },
+  );
+  auth.onIdentified((userId) => cosmetics.warm(userId));
+  manager.setCosmeticsResolver((userId) => cosmetics.get(userId));
   nameStyles.onEquipped((userId, nameStyle) => {
+    cosmetics.patch(userId, { nameStyle });
     void manager.refreshCosmetics(userId);
     void tournaments.refreshNameStyle(userId, nameStyle);
   });
   avatarFrames.onEquipped((userId, avatarFrame) => {
+    cosmetics.patch(userId, { avatarFrame });
     void manager.refreshCosmetics(userId);
     void tournaments.refreshAvatarFrame(userId, avatarFrame);
   });
   titles.onEquipped((userId, titleId) => {
+    cosmetics.patch(userId, { titleId });
     void manager.refreshCosmetics(userId);
     void tournaments.refreshTitle(userId, titleId);
     // The account's other tabs update their header and collection.
-    io.to(userChannel(userId)).emit('title:equipped', { titleId, title: titles.equippedTitle(userId) });
+    void titles
+      .equippedTitle(userId)
+      .then((title) => io.to(userChannel(userId)).emit('title:equipped', { titleId, title }))
+      .catch((err) => console.error('[titles] equip broadcast failed', err));
   });
   const tournaments = new TournamentManager(manager, timers, createTournamentSink(() => io, cfg), cfg);
   registerSocketHandlers(io, manager, cfg, comms, avatars, stands, auth, (socketId, userId) => {
-    void tournaments.setSocketAccount(socketId, { userId, nameStyle: nameStyles.equippedFor(userId), avatarFrame: avatarFrames.equippedFor(userId), titleId: userId ? titles.equippedTitleId(userId) : null });
+    const c = userId ? cosmetics.get(userId) : NO_COSMETICS;
+    void tournaments.setSocketAccount(socketId, { userId, nameStyle: c.nameStyle, avatarFrame: c.avatarFrame, titleId: c.titleId });
   });
   registerTournamentHandlers(
     io,
     tournaments,
     cfg,
     avatars,
-    (userId) => nameStyles.equippedFor(userId),
-    (userId) => avatarFrames.equippedFor(userId),
-    (userId) => (userId ? titles.equippedTitleId(userId) : null),
+    (userId) => (userId ? cosmetics.get(userId).nameStyle : DEFAULT_NAME_STYLE),
+    (userId) => (userId ? cosmetics.get(userId).avatarFrame : DEFAULT_AVATAR_FRAME),
+    (userId) => (userId ? cosmetics.get(userId).titleId : null),
   );
   app.use(createAvatarRouter(cfg.avatars, avatars));
   app.use(createAuthRouter(cfg.accounts, auth, recorder, avatars, achievements, titles));
@@ -174,8 +195,7 @@ export function createCaroServer(
     () =>
       void manager.sweep().then(() => {
         recorder.prune();
-        accounts.pruneSessions();
-        return Promise.all([comms.prune(), stands.prune(), tournaments.sweep()]);
+        return Promise.all([accounts.pruneSessions().catch((err) => console.error('[accounts] session prune failed', err)), comms.prune(), stands.prune(), tournaments.sweep()]);
       }),
     60_000,
   );
@@ -191,7 +211,58 @@ export function createCaroServer(
       clearInterval(sweep);
       timers.clearAll();
       await new Promise<void>((resolve) => io.close(() => resolve()));
-      accounts.close();
+      // Let finished games reach the database before it closes.
+      await recorder.idle();
+      await accounts.close();
+    },
+  };
+}
+
+const NO_COSMETICS: SeatCosmetics = { titleId: null, nameStyle: DEFAULT_NAME_STYLE, avatarFrame: DEFAULT_AVATAR_FRAME };
+/** Accounts kept; the least recently used drop out first. */
+const COSMETICS_CACHE_SIZE = 5_000;
+
+/**
+ * Equipped cosmetics per account, readable synchronously. `load` reads the
+ * database; `onLoaded` runs when a miss finished loading, so whoever got the
+ * defaults can re-dress.
+ */
+function createCosmeticsCache(load: (userId: string) => Promise<SeatCosmetics>, onLoaded: (userId: string, c: SeatCosmetics) => void) {
+  const entries = new Map<string, SeatCosmetics>();
+  const pending = new Map<string, Promise<SeatCosmetics>>();
+  const put = (userId: string, c: SeatCosmetics) => {
+    entries.delete(userId);
+    entries.set(userId, c);
+    if (entries.size > COSMETICS_CACHE_SIZE) entries.delete(entries.keys().next().value!);
+  };
+  const warm = (userId: string): Promise<SeatCosmetics> => {
+    const hit = entries.get(userId);
+    if (hit) return Promise.resolve(hit);
+    let p = pending.get(userId);
+    if (!p) {
+      p = load(userId)
+        .then((c) => (put(userId, c), c))
+        .finally(() => pending.delete(userId));
+      pending.set(userId, p);
+    }
+    return p;
+  };
+  return {
+    warm: async (userId: string) => {
+      await warm(userId);
+    },
+    get(userId: string): SeatCosmetics {
+      const hit = entries.get(userId);
+      if (hit) return hit;
+      warm(userId).then(
+        (c) => onLoaded(userId, c),
+        (err) => console.error('[cosmetics] load failed', err),
+      );
+      return NO_COSMETICS;
+    },
+    patch(userId: string, change: Partial<SeatCosmetics>) {
+      const hit = entries.get(userId);
+      if (hit) put(userId, { ...hit, ...change });
     },
   };
 }

@@ -55,9 +55,9 @@ const wonFinal = () => game({ mode: 'tournament', tournamentId: 't1', tournament
 const marathon = () => game({ result: 'draw', reason: 'draw', moves: Array.from({ length: 200 }, (_, i) => i) });
 
 /** The error code a call throws. */
-function codeOf(fn: () => unknown): string {
+async function codeOf(fn: () => Promise<unknown>): Promise<string> {
   try {
-    fn();
+    await fn();
   } catch (err) {
     if (err instanceof AvatarFrameError) return err.code;
     throw err;
@@ -114,157 +114,159 @@ describe('avatar frame ownership, coins and achievements', () => {
   let achievements: AchievementManager;
   let userId: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store = new AccountStore(':memory:');
     frames = new AvatarFrameService(store, links);
     achievements = new AchievementManager(store);
-    userId = store.createUser({ email: 'f@example.com', passwordHash: 'x', nickname: 'F', avatar: null })!.id;
+    userId = (await store.createUser({ email: 'f@example.com', passwordHash: 'x', nickname: 'F', avatar: null }))!.id;
   });
-  afterEach(() => store.close());
+  afterEach(async () => {
+    await store.close();
+  });
 
-  const view = (id: string) => frames.overview(userId).frames.find((f) => f.id === id)!;
+  const view = async (id: string) => (await frames.overview(userId)).frames.find((f) => f.id === id)!;
 
-  it('a new account owns the default frame and wears it; guests too', () => {
-    assert.deepEqual([...frames.ownedIds(userId)], [DEFAULT_AVATAR_FRAME]);
-    assert.equal(frames.equippedFor(userId), DEFAULT_AVATAR_FRAME);
-    assert.equal(store.getUser(userId)!.avatarFrameId, null);
-    const o = frames.overview(userId);
+  it('a new account owns the default frame and wears it; guests too', async () => {
+    assert.deepEqual([...(await frames.ownedIds(userId))], [DEFAULT_AVATAR_FRAME]);
+    assert.equal(await frames.equippedFor(userId), DEFAULT_AVATAR_FRAME);
+    assert.equal((await store.getUser(userId))!.avatarFrameId, null);
+    const o = await frames.overview(userId);
     assert.equal(o.equippedAvatarFrame, DEFAULT_AVATAR_FRAME);
     assert.deepEqual(o.ownedAvatarFrames, [DEFAULT_AVATAR_FRAME]);
     assert.deepEqual(o.frames.filter((f) => f.owned).map((f) => f.id), [DEFAULT_AVATAR_FRAME]);
-    assert.equal(frames.equippedFor(null), DEFAULT_AVATAR_FRAME, 'guests');
-    assert.deepEqual(frames.equip(userId, DEFAULT_AVATAR_FRAME).equippedAvatarFrame, DEFAULT_AVATAR_FRAME, 'always equippable');
+    assert.equal(await frames.equippedFor(null), DEFAULT_AVATAR_FRAME, 'guests');
+    assert.deepEqual((await frames.equip(userId, DEFAULT_AVATAR_FRAME)).equippedAvatarFrame, DEFAULT_AVATAR_FRAME, 'always equippable');
   });
 
-  it('refuses to equip unowned, unknown or malformed frames, with the reason', () => {
-    assert.equal(codeOf(() => frames.equip(userId, 'frame_fire')), 'FRAME_NOT_OWNED');
-    assert.equal(codeOf(() => frames.equip(userId, 'frame_crown')), 'ACHIEVEMENT_REQUIRED');
-    assert.equal(codeOf(() => frames.equip(userId, 'frame_nebula')), 'FRAME_NOT_OWNED', 'a secret never names its condition');
-    assert.equal(codeOf(() => frames.equip(userId, 'frame_nope')), 'FRAME_NOT_FOUND');
-    for (const bad of ['../../something', '<script>', '', { id: 'frame_fire' }, 7]) assert.equal(codeOf(() => frames.equip(userId, bad)), 'INVALID_FRAME');
-    assert.equal(frames.equippedFor(userId), DEFAULT_AVATAR_FRAME);
+  it('refuses to equip unowned, unknown or malformed frames, with the reason', async () => {
+    assert.equal(await codeOf(() => frames.equip(userId, 'frame_fire')), 'FRAME_NOT_OWNED');
+    assert.equal(await codeOf(() => frames.equip(userId, 'frame_crown')), 'ACHIEVEMENT_REQUIRED');
+    assert.equal(await codeOf(() => frames.equip(userId, 'frame_nebula')), 'FRAME_NOT_OWNED', 'a secret never names its condition');
+    assert.equal(await codeOf(() => frames.equip(userId, 'frame_nope')), 'FRAME_NOT_FOUND');
+    for (const bad of ['../../something', '<script>', '', { id: 'frame_fire' }, 7]) assert.equal(await codeOf(() => frames.equip(userId, bad)), 'INVALID_FRAME');
+    assert.equal(await frames.equippedFor(userId), DEFAULT_AVATAR_FRAME);
   });
 
-  it('buys with enough coins (price from the catalogue), then equips and goes back to default', () => {
-    store.addCoins(userId, 5_000);
-    const bought = frames.buy(userId, 'frame_fire');
+  it('buys with enough coins (price from the catalogue), then equips and goes back to default', async () => {
+    await store.addCoins(userId, 5_000);
+    const bought = await frames.buy(userId, 'frame_fire');
     assert.equal(bought.coins, 2_000);
     assert.equal(bought.frame.owned, true);
     assert.deepEqual(bought.ownedAvatarFrames.sort(), [DEFAULT_AVATAR_FRAME, 'frame_fire'].sort());
-    assert.equal(store.listCosmetics(userId, 'avatar_frame')[0].cost, 3_000);
+    assert.equal((await store.listCosmetics(userId, 'avatar_frame'))[0].cost, 3_000);
 
     const events: [string, string][] = [];
     frames.onEquipped((u, f) => events.push([u, f]));
-    assert.equal(frames.equip(userId, 'frame_fire').equippedAvatarFrame, 'frame_fire');
-    assert.equal(frames.equippedFor(userId), 'frame_fire');
-    assert.equal(view('frame_fire').equipped, true);
-    frames.equip(userId, 'frame_fire'); // no change, no event
-    frames.equip(userId, DEFAULT_AVATAR_FRAME);
-    assert.equal(store.getUser(userId)!.avatarFrameId, null, 'default is stored as NULL');
+    assert.equal((await frames.equip(userId, 'frame_fire')).equippedAvatarFrame, 'frame_fire');
+    assert.equal(await frames.equippedFor(userId), 'frame_fire');
+    assert.equal((await view('frame_fire')).equipped, true);
+    await frames.equip(userId, 'frame_fire'); // no change, no event
+    await frames.equip(userId, DEFAULT_AVATAR_FRAME);
+    assert.equal((await store.getUser(userId))!.avatarFrameId, null, 'default is stored as NULL');
     assert.deepEqual(events, [
       [userId, 'frame_fire'],
       [userId, DEFAULT_AVATAR_FRAME],
     ]);
   });
 
-  it('refuses a purchase without enough coins and changes nothing', () => {
-    store.addCoins(userId, 499);
-    assert.equal(codeOf(() => frames.buy(userId, 'frame_wood')), 'NOT_ENOUGH_COIN');
-    assert.equal(store.coins(userId), 499);
-    assert.equal(view('frame_wood').owned, false);
+  it('refuses a purchase without enough coins and changes nothing', async () => {
+    await store.addCoins(userId, 499);
+    assert.equal(await codeOf(() => frames.buy(userId, 'frame_wood')), 'NOT_ENOUGH_COIN');
+    assert.equal(await store.coins(userId), 499);
+    assert.equal((await view('frame_wood')).owned, false);
   });
 
-  it('never charges twice: a second purchase is ALREADY_OWNED, and the store refuses a raced one', () => {
-    store.addCoins(userId, 5_000);
-    frames.buy(userId, 'frame_ocean');
-    assert.equal(codeOf(() => frames.buy(userId, 'frame_ocean')), 'ALREADY_OWNED');
-    assert.equal(store.purchaseCosmetic(userId, 'avatar_frame', 'frame_ocean', 1_500), 'ALREADY_OWNED', 'even past the service check');
-    assert.equal(store.coins(userId), 3_500);
-    assert.equal(codeOf(() => frames.buy(userId, DEFAULT_AVATAR_FRAME)), 'ALREADY_OWNED');
+  it('never charges twice: a second purchase is ALREADY_OWNED, and the store refuses a raced one', async () => {
+    await store.addCoins(userId, 5_000);
+    await frames.buy(userId, 'frame_ocean');
+    assert.equal(await codeOf(() => frames.buy(userId, 'frame_ocean')), 'ALREADY_OWNED');
+    assert.equal(await store.purchaseCosmetic(userId, 'avatar_frame', 'frame_ocean', 1_500), 'ALREADY_OWNED', 'even past the service check');
+    assert.equal(await store.coins(userId), 3_500);
+    assert.equal(await codeOf(() => frames.buy(userId, DEFAULT_AVATAR_FRAME)), 'ALREADY_OWNED');
   });
 
-  it('cannot buy achievement, secret or unknown frames with coins, whatever the balance', () => {
-    store.addCoins(userId, 1_000_000);
-    assert.equal(codeOf(() => frames.buy(userId, 'frame_crown')), 'ACHIEVEMENT_REQUIRED');
-    assert.equal(codeOf(() => frames.buy(userId, 'frame_nebula')), 'FRAME_NOT_PURCHASABLE');
-    assert.equal(codeOf(() => frames.buy(userId, 'frame_free_gold')), 'FRAME_NOT_FOUND');
-    assert.equal(store.coins(userId), 1_000_000);
+  it('cannot buy achievement, secret or unknown frames with coins, whatever the balance', async () => {
+    await store.addCoins(userId, 1_000_000);
+    assert.equal(await codeOf(() => frames.buy(userId, 'frame_crown')), 'ACHIEVEMENT_REQUIRED');
+    assert.equal(await codeOf(() => frames.buy(userId, 'frame_nebula')), 'FRAME_NOT_PURCHASABLE');
+    assert.equal(await codeOf(() => frames.buy(userId, 'frame_free_gold')), 'FRAME_NOT_FOUND');
+    assert.equal(await store.coins(userId), 1_000_000);
   });
 
-  it('an achievement grants its frame exactly once, and re-checks never duplicate it', () => {
-    store.recordMatch(userId, wonFinal());
-    const { unlocked } = achievements.evaluate(userId);
+  it('an achievement grants its frame exactly once, and re-checks never duplicate it', async () => {
+    await store.recordMatch(userId, wonFinal());
+    const { unlocked } = await achievements.evaluate(userId);
     const champion = unlocked.find((a) => a.id === 'champion-1')!;
     assert.deepEqual(
       champion.rewards.find((r) => r.type === 'avatarFrame'),
       { type: 'avatarFrame', avatarFrame: { id: 'frame_crown', name: getAvatarFrame('frame_crown')!.name, rarity: 'legendary' } },
     );
-    assert.equal(view('frame_crown').owned, true);
-    assert.deepEqual(view('frame_crown').achievement, { id: 'champion-1', name: 'Nhà vô địch' });
-    for (let i = 0; i < 3; i++) achievements.evaluate(userId);
-    achievements.overview(userId);
-    assert.equal(store.listCosmetics(userId, 'avatar_frame').filter((c) => c.itemId === 'frame_crown').length, 1);
-    frames.equip(userId, 'frame_crown');
-    assert.equal(frames.equippedFor(userId), 'frame_crown');
+    assert.equal((await view('frame_crown')).owned, true);
+    assert.deepEqual((await view('frame_crown')).achievement, { id: 'champion-1', name: 'Nhà vô địch' });
+    for (let i = 0; i < 3; i++) await achievements.evaluate(userId);
+    await achievements.overview(userId);
+    assert.equal((await store.listCosmetics(userId, 'avatar_frame')).filter((c) => c.itemId === 'frame_crown').length, 1);
+    await frames.equip(userId, 'frame_crown');
+    assert.equal(await frames.equippedFor(userId), 'frame_crown');
   });
 
-  it('backfills the frame for an achievement completed before frames existed, once, without paying coins again', () => {
-    store.recordMatch(userId, wonFinal());
+  it('backfills the frame for an achievement completed before frames existed, once, without paying coins again', async () => {
+    await store.recordMatch(userId, wonFinal());
     // As if these had been unlocked (and paid) before avatar frames existed.
-    store.transaction(() => {
-      for (const id of ['games-1', 'wins-1', 'pvp-1', 'champion-1']) store.insertAchievementUnlock(userId, id, 0);
+    await store.transaction(async () => {
+      for (const id of ['games-1', 'wins-1', 'pvp-1', 'champion-1']) await store.insertAchievementUnlock(userId, id, 0);
     });
-    const coins = store.coins(userId);
-    achievements.evaluate(userId);
-    assert.equal(view('frame_crown').owned, true);
-    achievements.evaluate(userId);
-    assert.equal(store.listCosmetics(userId, 'avatar_frame').length, 1);
-    assert.equal(store.coins(userId) - coins, 0, 'no coins paid for the restored reward');
+    const coins = await store.coins(userId);
+    await achievements.evaluate(userId);
+    assert.equal((await view('frame_crown')).owned, true);
+    await achievements.evaluate(userId);
+    assert.equal((await store.listCosmetics(userId, 'avatar_frame')).length, 1);
+    assert.equal((await store.coins(userId)) - coins, 0, 'no coins paid for the restored reward');
   });
 
-  it('keeps the secret frame hidden until owned, then reveals it', () => {
+  it('keeps the secret frame hidden until owned, then reveals it', async () => {
     const leak = (x: unknown) => JSON.stringify(x);
     const secret = getAvatarFrame('frame_nebula')!;
-    const masked = view('frame_nebula');
+    const masked = await view('frame_nebula');
     assert.deepEqual(
       { name: masked.name, unlock: masked.unlock, price: masked.price, achievement: masked.achievement, asset: masked.asset, secret: masked.secret, rarity: masked.rarity },
       { name: '???', unlock: 'secret', price: null, achievement: null, asset: null, secret: true, rarity: 'secret' },
     );
-    for (const payload of [frames.overview(userId), frames.catalogue(), achievements.overview(userId)]) {
+    for (const payload of [await frames.overview(userId), frames.catalogue(), await achievements.overview(userId)]) {
       assert.ok(!leak(payload).includes(secret.name), 'the name stays hidden');
       assert.ok(!leak(payload).includes(secret.description), 'the description stays hidden');
     }
     // The hidden achievement only says "a frame", never which.
-    const hidden = achievements.overview(userId).achievements.find((a) => a.id === 'marathon')!;
+    const hidden = (await achievements.overview(userId)).achievements.find((a) => a.id === 'marathon')!;
     assert.deepEqual(hidden.rewards.filter((r) => r.type === 'avatarFrame'), [{ type: 'avatarFrame', avatarFrame: null }]);
 
-    store.recordMatch(userId, marathon());
-    const { unlocked } = achievements.evaluate(userId);
+    await store.recordMatch(userId, marathon());
+    const { unlocked } = await achievements.evaluate(userId);
     assert.ok(unlocked.some((a) => a.id === 'marathon'));
-    const open = view('frame_nebula');
+    const open = await view('frame_nebula');
     assert.deepEqual([open.secret, open.owned, open.name, open.unlock], [false, true, secret.name, 'secret']);
     assert.deepEqual(open.achievement, { id: 'marathon', name: 'Marathon trên bàn cờ' });
-    frames.equip(userId, 'frame_nebula');
-    assert.equal(frames.equippedFor(userId), 'frame_nebula');
+    await frames.equip(userId, 'frame_nebula');
+    assert.equal(await frames.equippedFor(userId), 'frame_nebula');
   });
 
-  it('falls back to default for stored ids that are unknown, retired or not owned', () => {
-    const db = store.open();
-    db.prepare("UPDATE users SET avatar_frame_id = 'frame_fire' WHERE id = ?").run(userId);
-    assert.equal(frames.equippedFor(userId), DEFAULT_AVATAR_FRAME, 'not owned: ignored');
+  it('falls back to default for stored ids that are unknown, retired or not owned', async () => {
+    const db = await store.open();
+    await db.execute({ sql: "UPDATE users SET avatar_frame_id = 'frame_fire' WHERE id = ?", args: [userId] });
+    assert.equal(await frames.equippedFor(userId), DEFAULT_AVATAR_FRAME, 'not owned: ignored');
 
-    db.prepare("INSERT INTO user_cosmetics (user_id, kind, item_id, acquired_at, source_type) VALUES (?, 'avatar_frame', 'frame_retired', 0, 'event')").run(userId);
-    db.prepare("UPDATE users SET avatar_frame_id = 'frame_retired' WHERE id = ?").run(userId);
-    assert.equal(frames.equippedFor(userId), DEFAULT_AVATAR_FRAME, 'owned but gone from the catalogue');
-    assert.ok(!frames.ownedIds(userId).has('frame_retired'));
+    await db.execute({ sql: "INSERT INTO user_cosmetics (user_id, kind, item_id, acquired_at, source_type) VALUES (?, 'avatar_frame', 'frame_retired', 0, 'event')", args: [userId] });
+    await db.execute({ sql: "UPDATE users SET avatar_frame_id = 'frame_retired' WHERE id = ?", args: [userId] });
+    assert.equal(await frames.equippedFor(userId), DEFAULT_AVATAR_FRAME, 'owned but gone from the catalogue');
+    assert.ok(!(await frames.ownedIds(userId)).has('frame_retired'));
   });
 
-  it('frames and name styles share the inventory table without mixing', () => {
-    store.addCoins(userId, 10_000);
-    frames.buy(userId, 'frame_wood');
-    store.purchaseCosmetic(userId, 'name_style', 'frame_wood', 1); // same item id, other kind
-    assert.equal(store.listCosmetics(userId, 'avatar_frame').length, 1);
-    assert.equal(store.listCosmetics(userId, 'name_style').length, 1);
+  it('frames and name styles share the inventory table without mixing', async () => {
+    await store.addCoins(userId, 10_000);
+    await frames.buy(userId, 'frame_wood');
+    await store.purchaseCosmetic(userId, 'name_style', 'frame_wood', 1); // same item id, other kind
+    assert.equal((await store.listCosmetics(userId, 'avatar_frame')).length, 1);
+    assert.equal((await store.listCosmetics(userId, 'name_style')).length, 1);
   });
 });
 
@@ -273,9 +275,17 @@ describe('avatar frames: existing databases', () => {
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'caro-af-'));
   });
-  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => {
+    // libsql keeps a closed database's file open until its handle is garbage
+    // collected, and Windows refuses to delete it meanwhile. A leftover temp dir is harmless.
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (err) {
+      if (!['EPERM', 'EBUSY'].includes((err as NodeJS.ErrnoException).code ?? '')) throw err;
+    }
+  });
 
-  it('an account and its history from before avatar frames migrate in place and wear the default', () => {
+  it('an account and its history from before avatar frames migrate in place and wear the default', async () => {
     const path = join(dir, 'caro.db');
     // A database exactly as the previous version (schema 4) left it.
     const raw = new DatabaseSync(path);
@@ -287,21 +297,21 @@ describe('avatar frames: existing databases', () => {
     raw.close();
 
     let store = new AccountStore(path);
-    store.recordMatch('old-user', game());
-    const user = store.getUser('old-user')!;
+    await store.recordMatch('old-user', game());
+    const user = (await store.getUser('old-user'))!;
     assert.deepEqual([user.avatarFrameId, user.coins, user.avatar, user.nickname], [null, 900, 'preset:fox', 'Old']);
-    assert.equal(store.listMatches('old-user', { limit: 5 }).length, 1);
+    assert.equal((await store.listMatches('old-user', { limit: 5 })).length, 1);
     const frames = new AvatarFrameService(store, links);
-    assert.equal(frames.equippedFor('old-user'), DEFAULT_AVATAR_FRAME);
-    assert.ok(frames.ownedIds('old-user').has(DEFAULT_AVATAR_FRAME));
-    frames.buy('old-user', 'frame_wood');
-    frames.equip('old-user', 'frame_wood');
-    store.close();
+    assert.equal(await frames.equippedFor('old-user'), DEFAULT_AVATAR_FRAME);
+    assert.ok((await frames.ownedIds('old-user')).has(DEFAULT_AVATAR_FRAME));
+    await frames.buy('old-user', 'frame_wood');
+    await frames.equip('old-user', 'frame_wood');
+    await store.close();
 
     store = new AccountStore(path);
-    assert.equal(new AvatarFrameService(store, links).equippedFor('old-user'), 'frame_wood', 'survives a restart');
-    assert.equal(store.coins('old-user'), 400);
-    store.close();
+    assert.equal(await new AvatarFrameService(store, links).equippedFor('old-user'), 'frame_wood', 'survives a restart');
+    assert.equal(await store.coins('old-user'), 400);
+    await store.close();
   });
 });
 
@@ -367,7 +377,7 @@ describe('avatar frames over the network', () => {
 
   async function account(email: string, coins = 0) {
     const reg = await api('POST', '/api/auth/register', { email, password: 'correct horse', nickname: email.split('@')[0] });
-    if (coins) server!.accounts.addCoins(reg.body.user.id, coins);
+    if (coins) await server!.accounts.addCoins(reg.body.user.id, coins);
     return { token: reg.body.token as string, id: reg.body.user.id as string };
   }
 
@@ -395,7 +405,7 @@ describe('avatar frames over the network', () => {
       api('POST', '/api/me/avatar-frames/frame_ocean/buy', undefined, token),
     ]);
     assert.deepEqual([x.status, y.status].sort(), [402, 402], 'not enough coins either way');
-    server!.accounts.addCoins((await api('GET', '/api/me', undefined, token)).body.user.id, 1_500);
+    await server!.accounts.addCoins((await api('GET', '/api/me', undefined, token)).body.user.id, 1_500);
     const [p, q] = await Promise.all([
       api('POST', '/api/me/avatar-frames/frame_ocean/buy', undefined, token),
       api('POST', '/api/me/avatar-frames/frame_ocean/buy', undefined, token),

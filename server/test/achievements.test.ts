@@ -69,8 +69,10 @@ describe('achievement definitions', () => {
     assert.ok(ACHIEVEMENTS.some((d) => d.hidden));
   });
 
-  it('supports custom conditions and lower-is-better goals', () => {
-    const stats = { ...toAchievementStats(new AccountStore(':memory:').stats('nobody')), totalWins: 3, totalDraws: 2 };
+  it('supports custom conditions and lower-is-better goals', async () => {
+    const empty = new AccountStore(':memory:');
+    const stats = { ...toAchievementStats(await empty.stats('nobody')), totalWins: 3, totalDraws: 2 };
+    await empty.close();
     const custom: AchievementDefinition = {
       id: 'x',
       name: 'x',
@@ -95,22 +97,24 @@ describe('player stats and achievements', () => {
   let manager: AchievementManager;
   let userId: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     store = new AccountStore(':memory:');
     manager = new AchievementManager(store);
-    userId = store.createUser({ email: 'p@example.com', passwordHash: 'x', nickname: 'P', avatar: null })!.id;
+    userId = (await store.createUser({ email: 'p@example.com', passwordHash: 'x', nickname: 'P', avatar: null }))!.id;
   });
-  afterEach(() => store.close());
+  afterEach(async () => {
+    await store.close();
+  });
 
-  const play = (...records: MatchRecord[]) => {
-    for (const r of records) store.recordMatch(userId, r);
-    return manager.evaluate(userId).unlocked.map((a) => a.id);
+  const play = async (...records: MatchRecord[]) => {
+    for (const r of records) await store.recordMatch(userId, r);
+    return (await manager.evaluate(userId)).unlocked.map((a) => a.id);
   };
-  const statsNow = () => toAchievementStats(store.stats(userId));
+  const statsNow = async () => toAchievementStats(await store.stats(userId));
 
-  it('first win: counts the game and the win, starts a streak, unlocks and pays the first achievements', () => {
-    const unlocked = play(game('win'));
-    const s = statsNow();
+  it('first win: counts the game and the win, starts a streak, unlocks and pays the first achievements', async () => {
+    const unlocked = await play(game('win'));
+    const s = await statsNow();
     assert.equal(s.gamesPlayed, 1);
     assert.equal(s.totalWins, 1);
     assert.equal(s.currentWinStreak, 1);
@@ -118,95 +122,95 @@ describe('player stats and achievements', () => {
     assert.equal(s.winsVsPlayer, 1);
     assert.equal(s.winsVsBot, 0);
     assert.deepEqual(unlocked.sort(), ['games-1', 'pvp-1', 'wins-1']);
-    assert.equal(store.coins(userId), coinsFor('games-1', 'pvp-1', 'wins-1'));
-    assert.equal(store.getUser(userId)!.coins, store.coins(userId));
+    assert.equal(await store.coins(userId), coinsFor('games-1', 'pvp-1', 'wins-1'));
+    assert.equal((await store.getUser(userId))!.coins, await store.coins(userId));
   });
 
-  it('a loss counts the game and resets the current streak; a draw counts as a draw', () => {
-    play(game('win'), game('win'), game('loss'));
-    let s = statsNow();
+  it('a loss counts the game and resets the current streak; a draw counts as a draw', async () => {
+    await play(game('win'), game('win'), game('loss'));
+    let s = await statsNow();
     assert.equal(s.gamesPlayed, 3);
     assert.equal(s.totalLosses, 1);
     assert.equal(s.currentWinStreak, 0);
     assert.equal(s.maxWinStreak, 2, 'the best streak is kept');
 
-    play(game('draw'));
-    s = statsNow();
+    await play(game('draw'));
+    s = await statsNow();
     assert.equal(s.gamesPlayed, 4);
     assert.equal(s.totalDraws, 1);
     assert.equal(s.totalWins, 2);
   });
 
-  it('win streaks grow, reset on a loss, and the best streak never drops', () => {
-    assert.ok(play(game('win'), game('win'), game('win')).includes('streak-3'));
-    assert.equal(statsNow().currentWinStreak, 3);
-    play(game('loss'));
-    assert.equal(statsNow().currentWinStreak, 0);
-    assert.equal(statsNow().maxWinStreak, 3);
-    play(game('win'));
-    assert.equal(statsNow().currentWinStreak, 1);
-    assert.equal(statsNow().maxWinStreak, 3);
+  it('win streaks grow, reset on a loss, and the best streak never drops', async () => {
+    assert.ok((await play(game('win'), game('win'), game('win'))).includes('streak-3'));
+    assert.equal((await statsNow()).currentWinStreak, 3);
+    await play(game('loss'));
+    assert.equal((await statsNow()).currentWinStreak, 0);
+    assert.equal((await statsNow()).maxWinStreak, 3);
+    await play(game('win'));
+    assert.equal((await statsNow()).currentWinStreak, 1);
+    assert.equal((await statsNow()).maxWinStreak, 3);
     // The streak achievement stays unlocked and full after the streak ended.
-    const view = manager.overview(userId).achievements.find((a) => a.id === 'streak-3')!;
+    const view = (await manager.overview(userId)).achievements.find((a) => a.id === 'streak-3')!;
     assert.equal(view.unlocked, true);
     assert.equal(view.percentage, 100);
   });
 
-  it('bot wins count separately from wins against people, per difficulty', () => {
-    const unlocked = play(game('win', { mode: 'bot', opponentIsBot: true, botDifficulty: 'hard' }), game('win', { mode: 'tournament' }));
-    const s = statsNow();
+  it('bot wins count separately from wins against people, per difficulty', async () => {
+    const unlocked = await play(game('win', { mode: 'bot', opponentIsBot: true, botDifficulty: 'hard' }), game('win', { mode: 'tournament' }));
+    const s = await statsNow();
     assert.equal(s.winsVsBot, 1);
     assert.equal(s.winsVsHardBot, 1);
     assert.equal(s.winsVsPlayer, 1, 'tournament wins are wins against people');
     assert.ok(unlocked.includes('bot-1') && unlocked.includes('bot-hard-1') && unlocked.includes('pvp-1'));
   });
 
-  it('unlocks exactly at the target, not before', () => {
-    for (let i = 0; i < 9; i++) assert.ok(!play(game('loss')).includes('games-10'));
-    const view = manager.overview(userId).achievements.find((a) => a.id === 'games-10')!;
+  it('unlocks exactly at the target, not before', async () => {
+    for (let i = 0; i < 9; i++) assert.ok(!(await play(game('loss'))).includes('games-10'));
+    const view = (await manager.overview(userId)).achievements.find((a) => a.id === 'games-10')!;
     assert.deepEqual([view.current, view.target, view.percentage, view.unlocked], [9, 10, 90, false]);
-    assert.deepEqual(play(game('loss')), ['games-10']);
+    assert.deepEqual(await play(game('loss')), ['games-10']);
   });
 
-  it('never unlocks or pays twice, and the same game recorded twice counts once', () => {
+  it('never unlocks or pays twice, and the same game recorded twice counts once', async () => {
     const g = game('win');
-    play(g);
-    const coins = store.coins(userId);
-    assert.deepEqual(play(g), [], 'duplicate game');
-    assert.deepEqual(manager.evaluate(userId).unlocked, []);
-    assert.equal(statsNow().gamesPlayed, 1);
-    assert.equal(store.coins(userId), coins);
+    await play(g);
+    const coins = await store.coins(userId);
+    assert.deepEqual(await play(g), [], 'duplicate game');
+    assert.deepEqual((await manager.evaluate(userId)).unlocked, []);
+    assert.equal((await statsNow()).gamesPlayed, 1);
+    assert.equal(await store.coins(userId), coins);
 
     // Even a direct second unlock attempt is ignored by the store.
-    assert.equal(store.insertAchievementUnlock(userId, 'wins-1', 999), false);
-    assert.equal(store.coins(userId), coins);
-    assert.equal(store.listAchievements(userId).filter((r) => r.achievementId === 'wins-1').length, 1);
+    assert.equal(await store.insertAchievementUnlock(userId, 'wins-1', 999), false);
+    assert.equal(await store.coins(userId), coins);
+    assert.equal((await store.listAchievements(userId)).filter((r) => r.achievementId === 'wins-1').length, 1);
   });
 
-  it('one game can unlock several achievements at once', () => {
-    for (let i = 0; i < 9; i++) store.recordMatch(userId, game('win'));
-    manager.evaluate(userId);
-    const unlocked = play(game('win'));
+  it('one game can unlock several achievements at once', async () => {
+    for (let i = 0; i < 9; i++) await store.recordMatch(userId, game('win'));
+    await manager.evaluate(userId);
+    const unlocked = await play(game('win'));
     // The 10th straight win: 10 games, 10 wins and a 10-game streak together.
     assert.deepEqual(unlocked.sort(), ['games-10', 'streak-10', 'wins-10']);
-    const coins = store.coins(userId);
+    const coins = await store.coins(userId);
     assert.equal(coins, coinsFor('games-1', 'wins-1', 'pvp-1', 'streak-3', 'streak-5', 'games-10', 'wins-10', 'streak-10'));
   });
 
-  it('backfills from games played before achievements existed', () => {
-    for (let i = 0; i < 53; i++) store.recordMatch(userId, game('win'));
-    const overview = manager.overview(userId);
+  it('backfills from games played before achievements existed', async () => {
+    for (let i = 0; i < 53; i++) await store.recordMatch(userId, game('win'));
+    const overview = await manager.overview(userId);
     const got = new Set(overview.newlyUnlocked.map((a) => a.id));
     for (const id of ['wins-1', 'wins-10', 'wins-50', 'games-50', 'streak-20', 'pvp-25']) assert.ok(got.has(id), id);
     assert.ok(!got.has('wins-100'));
     assert.equal(overview.summary.unlocked, got.size);
     assert.equal(overview.coins, [...got].reduce((sum, id) => sum + coinsFor(id), 0));
-    assert.deepEqual(manager.overview(userId).newlyUnlocked, [], 'reported once');
+    assert.deepEqual((await manager.overview(userId)).newlyUnlocked, [], 'reported once');
   });
 
-  it('keeps hidden achievements secret until unlocked', () => {
-    const secret = () => manager.overview(userId).achievements.find((a) => a.id === 'perfect-five')!;
-    let v = secret();
+  it('keeps hidden achievements secret until unlocked', async () => {
+    const secret = async () => (await manager.overview(userId)).achievements.find((a) => a.id === 'perfect-five')!;
+    let v = await secret();
     assert.equal(v.secret, true);
     assert.equal(v.name, '???');
     assert.equal(v.description, 'Thành tích bí mật');
@@ -217,30 +221,30 @@ describe('player stats and achievements', () => {
     assert.equal(v.percentage, 0, 'progress would hint at the condition');
 
     // X wins with its 5th move: 9 moves on the board, 5 of them X's.
-    play(game('win', { reason: 'five', moves: moves(9), winLine: [0, 2, 4, 6, 8] }));
-    v = secret();
+    await play(game('win', { reason: 'five', moves: moves(9), winLine: [0, 2, 4, 6, 8] }));
+    v = await secret();
     assert.equal(v.unlocked, true);
     assert.equal(v.secret, false);
     assert.equal(v.name, def('perfect-five').name);
     assert.ok(v.unlockedAt);
-    assert.equal(statsNow().fastestWinMoves, 5);
+    assert.equal((await statsNow()).fastestWinMoves, 5);
   });
 
-  it('counts moves: your own, and the longest game', () => {
-    play(game('loss', { myMark: 'O', moves: moves(101) }), game('win', { myMark: 'X', moves: moves(11) }));
-    const s = statsNow();
+  it('counts moves: your own, and the longest game', async () => {
+    await play(game('loss', { myMark: 'O', moves: moves(101) }), game('win', { myMark: 'X', moves: moves(11) }));
+    const s = await statsNow();
     assert.equal(s.totalMovesPlayed, 50 + 6);
     assert.equal(s.longestGameMoves, 101);
-    assert.ok(manager.overview(userId).achievements.find((a) => a.id === 'long-game')!.unlocked);
+    assert.ok((await manager.overview(userId)).achievements.find((a) => a.id === 'long-game')!.unlocked);
   });
 
-  it('progress never goes past 100%', () => {
-    for (let i = 0; i < 12; i++) store.recordMatch(userId, game('win'));
-    for (const a of manager.overview(userId).achievements) {
+  it('progress never goes past 100%', async () => {
+    for (let i = 0; i < 12; i++) await store.recordMatch(userId, game('win'));
+    for (const a of (await manager.overview(userId)).achievements) {
       assert.ok(a.progress >= 0 && a.progress <= 1, a.id);
       assert.ok(a.percentage >= 0 && a.percentage <= 100, a.id);
     }
-    const first = manager.overview(userId).achievements.find((a) => a.id === 'wins-1')!;
+    const first = (await manager.overview(userId)).achievements.find((a) => a.id === 'wins-1')!;
     assert.equal(first.current, 12);
     assert.equal(first.percentage, 100);
   });
