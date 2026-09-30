@@ -83,15 +83,14 @@ services:
 
       # --- Voice chat TURN relay (Metered.ca) ---
       # Blank = public STUN only, which fails between some networks (4G carrier NAT).
-      # METERED_DOMAIN is e.g. yourapp.metered.live; METERED_SECRET_KEY mints expiring
-      # credentials. Alternatives: METERED_API_KEY instead of the secret key, or a fixed
-      # login with TURN_USERNAME + TURN_CREDENTIAL (+ optional TURN_URLS).
-      - key: METERED_DOMAIN
+      # The username / password from the Metered dashboard ("TURN Server" page). Relay URLs
+      # default to Metered's global.relay.metered.ca; set TURN_URLS (comma-separated) only if
+      # the dashboard lists different ones. Alternative: METERED_DOMAIN + METERED_SECRET_KEY
+      # (or METERED_API_KEY) to mint expiring credentials instead of a fixed login.
+      - key: TURN_USERNAME
         sync: false
-      - key: METERED_SECRET_KEY
+      - key: TURN_CREDENTIAL
         sync: false
-      - key: METERED_CREDENTIAL_HOURS
-        value: "6"
 
   - type: web
     name: caro-online

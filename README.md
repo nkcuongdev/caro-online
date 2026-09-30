@@ -216,7 +216,7 @@ Server Socket.IO cần một tiến trình chạy lâu dài, nên không dùng s
    | Biến | Service | Giá trị |
    | ---- | ------- | ------- |
    | `CLOUDINARY_URL` | server | giống trong `server/.env`. Để trống thì avatar lưu trên ổ đĩa |
-   | `METERED_DOMAIN` / `METERED_SECRET_KEY` | server | TURN cho voice chat. Để trống thì voice chỉ dùng STUN |
+   | `TURN_USERNAME` / `TURN_CREDENTIAL` | server | username / password trong trang **TURN Server** của Metered, dùng cho voice chat. Để trống thì voice chỉ dùng STUN |
    | `VITE_SOCKET_URL` | static site | URL công khai của `caro-online-server`, ví dụ `https://caro-online-server.onrender.com` |
 
    `JWT_SECRET` được Render tự sinh. Các biến còn lại đã được điền sẵn giá trị mặc định (xem bảng bên dưới).
