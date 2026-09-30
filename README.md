@@ -209,7 +209,16 @@ Server Socket.IO cần một tiến trình chạy lâu dài, nên không dùng s
 | `caro-online-server` | Web Service Node, region Singapore, gói **Free** (demo) | Ngủ sau ~15 phút không có truy cập. Mỗi lần ngủ hoặc deploy sẽ mất các phòng đang chơi **và cả tài khoản, lịch sử (SQLite)**. Khi có người chơi thật, chuyển sang gói Starter và gắn ổ đĩa tại `/var/data` (hướng dẫn nằm trong phần chú thích của `render.yaml`). |
 | `caro-online` | Static Site | Miễn phí, chạy qua CDN, không ngủ. Có sẵn rewrite SPA cho `/game/:roomId` và `/t/:id`. |
 
-### Triển khai lên Render
+### Bản đang chạy
+
+| | URL |
+| - | --- |
+| Frontend | https://caro-online-phju.onrender.com |
+| Backend | https://caro-online-server-hvev.onrender.com (`/health`) |
+
+Blueprint `caro-online` trên Render theo dõi nhánh `main`: mỗi lần push, Render tự đồng bộ `render.yaml` và deploy lại cả hai service.
+
+### Triển khai lên Render (tạo mới từ đầu)
 1. Đẩy repo lên GitHub. Không commit `server/.env`.
 2. Render → **New → Blueprint** → chọn repo. Render đọc `render.yaml` và hỏi các biến bí mật (`sync: false`):
 
@@ -217,12 +226,9 @@ Server Socket.IO cần một tiến trình chạy lâu dài, nên không dùng s
    | ---- | ------- | ------- |
    | `CLOUDINARY_URL` | server | giống trong `server/.env`. Để trống thì avatar lưu trên ổ đĩa |
    | `TURN_USERNAME` / `TURN_CREDENTIAL` | server | username / password trong trang **TURN Server** của Metered, dùng cho voice chat. Để trống thì voice chỉ dùng STUN |
-   | `VITE_SOCKET_URL` | static site | URL công khai của `caro-online-server`, ví dụ `https://caro-online-server.onrender.com` |
 
    `JWT_SECRET` được Render tự sinh. Các biến còn lại đã được điền sẵn giá trị mặc định (xem bảng bên dưới).
-3. Sau lần deploy đầu, mở trang của từng service để lấy URL thật (Render thêm hậu tố nếu tên đã có người dùng):
-   - Nếu URL backend khác với giá trị đã nhập, sửa `VITE_SOCKET_URL` rồi **Manual Deploy** lại static site (Vite nhúng biến lúc build).
-   - Thay `CLIENT_ORIGIN` (mặc định `https://caro-online*.onrender.com`) bằng URL chính xác của frontend hoặc tên miền riêng.
+3. Render thêm hậu tố vào tên service khi tên đó đã có người dùng. Vì vậy, nếu tạo lại, hãy sửa `CLIENT_ORIGIN` (server) và `VITE_SOCKET_URL` (static site) trong `render.yaml` theo URL mới rồi push. Vite nhúng `VITE_SOCKET_URL` vào lúc build.
 4. Kiểm tra `https://<backend>/health` trả về `{"status":"ok"}`.
 
 Khi dùng tên miền riêng, hãy thêm nó vào `CLIENT_ORIGIN` và đặt `VITE_PUBLIC_URL` cho static site để link mời dùng tên miền đó.

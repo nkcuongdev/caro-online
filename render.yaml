@@ -29,11 +29,10 @@ services:
         value: "22" # >= 22.13 for node:sqlite
 
       # --- CORS ---
-      # Origins allowed to connect (comma-separated, `*` wildcards). This also covers the
-      # "-xxxx" suffix Render adds when a name is taken. Replace with the exact URL or your
-      # custom domain once it is known.
+      # Origins allowed to connect (comma-separated, `*` wildcards): the caro-online static
+      # site. Add your custom domain here when you set one up.
       - key: CLIENT_ORIGIN
-        value: https://caro-online*.onrender.com
+        value: https://caro-online-phju.onrender.com
 
       # --- Accounts (SQLite; ephemeral on the free plan, see above) ---
       - key: DATABASE_PATH
@@ -111,10 +110,9 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-      # Public URL of caro-online-server, e.g. https://caro-online-server.onrender.com
-      # (copy it from that service's page; Render may add a suffix if the name is taken).
+      # Public URL of caro-online-server (Render added the "-hvev" suffix to its name).
       - key: VITE_SOCKET_URL
-        sync: false
+        value: https://caro-online-server-hvev.onrender.com
       # Optional, not set here: VITE_API_URL (defaults to VITE_SOCKET_URL) and
       # VITE_PUBLIC_URL (origin used in invite links; defaults to the page's own origin,
       # set it when you add a custom domain). TURN is served by the server, so leave
