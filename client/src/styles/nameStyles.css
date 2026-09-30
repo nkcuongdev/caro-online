@@ -1,0 +1,185 @@
+/*
+ * Name styles (components/PlayerName.tsx, ids in lib/nameStyles.ts).
+ *
+ * Rules every style follows:
+ * - Only colour / fill / shadow / background-position change. Nothing touches
+ *   font, size, spacing or padding, so a styled name takes exactly the width of
+ *   the plain one and animations never shift layout.
+ * - Motion is slow (≥ 3s) and never flashes. `prefers-reduced-motion` turns all
+ *   of it off and keeps the static colours.
+ * - Pure CSS: no per-name timers, canvases or JS loops, so a lobby full of
+ *   names costs nothing extra.
+ * - Colours are dark enough to read on the app's light cards.
+ *
+ * These rules are unlayered, so they beat Tailwind's text colour utilities on
+ * the same element (the name keeps its layout classes, the style owns colour).
+ *
+ * Gradient text uses background-clip:text. A glow on gradient text is a
+ * `filter: drop-shadow`, because a text-shadow would paint over the clipped
+ * gradient.
+ */
+
+.ns {
+  /* Truncated names keep their ellipsis in the style's colour. */
+  text-overflow: ellipsis;
+}
+
+/* ─── Common: one flat colour ─────────────────────────────────────────────── */
+
+.ns-ocean-blue { color: #0369a1; }
+.ns-emerald { color: #047857; }
+.ns-rose { color: #be123c; }
+
+/* ─── Shared gradient text ────────────────────────────────────────────────── */
+
+.ns-mystic,
+.ns-sunset,
+.ns-ice,
+.ns-purple-shimmer,
+.ns-golden-shimmer,
+.ns-rainbow,
+.ns-galaxy,
+.ns-royal-gold,
+.ns-void {
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  background-repeat: no-repeat;
+}
+
+/* Browsers without background-clip:text get the style's main colour instead. */
+@supports not ((background-clip: text) or (-webkit-background-clip: text)) {
+  .ns-mystic { color: #7c3aed; }
+  .ns-sunset { color: #e11d48; }
+  .ns-ice { color: #0284c7; }
+  .ns-purple-shimmer { color: #6d28d9; }
+  .ns-golden-shimmer, .ns-royal-gold { color: #b45309; }
+  .ns-rainbow { color: #7c3aed; }
+  .ns-galaxy { color: #4338ca; }
+  .ns-void { color: #3b0764; }
+}
+
+/* ─── Rare: static gradient, soft glow ────────────────────────────────────── */
+
+.ns-mystic {
+  background-image: linear-gradient(90deg, #7c3aed, #c026d3 55%, #db2777);
+  filter: drop-shadow(0 0 5px rgb(168 85 247 / 0.28));
+}
+.ns-sunset {
+  background-image: linear-gradient(90deg, #ea580c, #e11d48 50%, #a21caf);
+  filter: drop-shadow(0 0 4px rgb(244 63 94 / 0.22));
+}
+.ns-ice {
+  background-image: linear-gradient(90deg, #0369a1, #0891b2 45%, #2563eb);
+  filter: drop-shadow(0 0 5px rgb(34 211 238 / 0.45));
+}
+
+/* ─── Epic: slow motion ───────────────────────────────────────────────────── */
+
+/* Neon: a flat colour whose glow breathes. */
+.ns-neon-cyan {
+  color: #0e7490;
+  text-shadow: 0 0 3px rgb(34 211 238 / 0.55), 0 0 9px rgb(34 211 238 / 0.3);
+  animation: ns-neon 3.2s ease-in-out infinite;
+}
+@keyframes ns-neon {
+  0%, 100% { text-shadow: 0 0 3px rgb(34 211 238 / 0.55), 0 0 9px rgb(34 211 238 / 0.3); }
+  50% { text-shadow: 0 0 4px rgb(34 211 238 / 0.85), 0 0 14px rgb(34 211 238 / 0.5); }
+}
+
+/*
+ * Shimmer: a light band crosses the name, then rests. The band sits in a
+ * 300%-wide background that slides by background-position; the start
+ * position (band parked off the right) is the static look.
+ */
+.ns-purple-shimmer,
+.ns-golden-shimmer {
+  background-size: 300% 100%;
+  background-position: 100% 0;
+  animation: ns-shimmer 4.5s ease-in-out infinite;
+}
+.ns-purple-shimmer {
+  background-image: linear-gradient(100deg, #6d28d9 0 42%, #c4b5fd 50%, #6d28d9 58% 100%);
+  filter: drop-shadow(0 0 4px rgb(139 92 246 / 0.3));
+}
+.ns-golden-shimmer {
+  background-image: linear-gradient(100deg, #b45309 0 42%, #fde68a 50%, #b45309 58% 100%);
+  filter: drop-shadow(0 0 4px rgb(245 158 11 / 0.3));
+}
+@keyframes ns-shimmer {
+  0%, 55% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+
+/* ─── Legendary ───────────────────────────────────────────────────────────── */
+
+/* Rainbow: the colours drift slowly; the gradient repeats, so the loop is seamless. */
+.ns-rainbow {
+  background-image: linear-gradient(90deg, #dc2626, #ea580c, #ca8a04, #16a34a, #0284c7, #7c3aed, #db2777, #dc2626);
+  background-size: 200% 100%;
+  background-repeat: repeat;
+  background-position: 0 0;
+  animation: ns-drift 7s linear infinite;
+}
+@keyframes ns-drift {
+  to { background-position: -200% 0; }
+}
+
+/* Galaxy: a drifting nebula with a few stars caught in the letters. */
+.ns-galaxy {
+  background-image:
+    radial-gradient(circle, rgb(255 255 255 / 0.95) 0 0.7px, transparent 1.2px),
+    radial-gradient(circle, rgb(224 231 255 / 0.8) 0 0.6px, transparent 1px),
+    linear-gradient(90deg, #312e81, #6d28d9, #c026d3, #2563eb, #312e81);
+  background-size: 11px 9px, 17px 13px, 300% 100%;
+  background-repeat: repeat, repeat, repeat;
+  background-position: 0 0, 5px 4px, 0 0;
+  filter: drop-shadow(0 0 5px rgb(139 92 246 / 0.4));
+  animation: ns-galaxy 12s ease-in-out infinite alternate;
+}
+@keyframes ns-galaxy {
+  to { background-position: 22px 9px, -12px 13px, 100% 0; }
+}
+
+/* Royal gold: a metallic fill with a slow shine and a faint engraved edge. */
+.ns-royal-gold {
+  background-image:
+    linear-gradient(100deg, transparent 0 42%, rgb(255 251 235 / 0.95) 50%, transparent 58% 100%),
+    linear-gradient(180deg, #d97706, #92400e 55%, #b45309);
+  background-size: 300% 100%, 100% 100%;
+  background-position: 100% 0, 0 0;
+  filter: drop-shadow(0 1px 0 rgb(120 53 15 / 0.22)) drop-shadow(0 0 5px rgb(251 191 36 / 0.35));
+  animation: ns-royal 5s ease-in-out infinite;
+}
+@keyframes ns-royal {
+  0%, 60% { background-position: 100% 0, 0 0; }
+  100% { background-position: 0 0, 0 0; }
+}
+
+/* ─── Secret ──────────────────────────────────────────────────────────────── */
+
+/* Void: near-black letters with a violet rift drifting through them. */
+.ns-void {
+  background-image: linear-gradient(90deg, #0f172a 0 30%, #7e22ce 45%, #c084fc 50%, #7e22ce 55%, #0f172a 70% 100%);
+  background-size: 250% 100%;
+  background-position: 100% 0;
+  filter: drop-shadow(0 0 4px rgb(147 51 234 / 0.45));
+  animation: ns-void 6s ease-in-out infinite alternate;
+}
+@keyframes ns-void {
+  to { background-position: 0 0; }
+}
+
+/* ─── Accessibility ───────────────────────────────────────────────────────── */
+
+/*
+ * The app-wide reduced-motion rule shortens animations to one 1ms run, which
+ * would leave each style on its last keyframe. Turn them off instead: every
+ * style's resting look is its un-animated declaration above.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .ns {
+    animation: none !important;
+  }
+}

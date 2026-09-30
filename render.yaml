@@ -1,0 +1,122 @@
+# Render Blueprint: the whole app on Render as two services.
+#   caro-online-server  Node web service (Socket.IO + REST + SQLite accounts), Singapore, free
+#   caro-online         static site (client/dist on Render's CDN, free, never sleeps)
+# They stay separate so a frontend deploy never restarts the game server (rooms live in memory).
+#
+# Variables marked `sync: false` are secrets: Render asks for them when the Blueprint is
+# created and never stores them in this file. Everything else is filled in with its default,
+# so it can be tuned from the dashboard without a code change.
+services:
+  - type: web
+    name: caro-online-server
+    runtime: node
+    rootDir: server
+    region: singapore
+    # Free plan (demo): the service sleeps after ~15 idle minutes and its filesystem is wiped
+    # on every sleep and deploy, so live rooms AND the SQLite accounts/history are lost.
+    # For real players switch to starter, add the disk below and point DATABASE_PATH and
+    # AVATAR_UPLOAD_DIR at it:
+    #   disk: { name: caro-data, mountPath: /var/data, sizeGB: 1 }
+    #   DATABASE_PATH=/var/data/caro.db   AVATAR_UPLOAD_DIR=/var/data/avatars
+    plan: free
+    numInstances: 1 # rooms, timers and the SQLite file assume a single instance
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      # PORT is injected by Render; don't set it.
+      - key: NODE_VERSION
+        value: "22" # >= 22.13 for node:sqlite
+
+      # --- CORS ---
+      # Origins allowed to connect (comma-separated, `*` wildcards). This also covers the
+      # "-xxxx" suffix Render adds when a name is taken. Replace with the exact URL or your
+      # custom domain once it is known.
+      - key: CLIENT_ORIGIN
+        value: https://caro-online*.onrender.com
+
+      # --- Accounts (SQLite; ephemeral on the free plan, see above) ---
+      - key: DATABASE_PATH
+        value: data/caro.db
+      - key: JWT_SECRET
+        generateValue: true
+      - key: AUTH_SESSION_DAYS
+        value: "30"
+      - key: AUTH_ATTEMPTS_PER_10_MIN
+        value: "20"
+
+      # --- Avatars ---
+      # cloudinary://<api_key>:<api_secret>@<cloud_name>, the same value as in server/.env.
+      # Needed on the free plan: left blank, uploads go to AVATAR_UPLOAD_DIR and vanish on sleep.
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: CLOUDINARY_FOLDER
+        value: caro/avatars
+      - key: AVATAR_UPLOAD_DIR
+        value: uploads/avatars
+      - key: AVATAR_MAX_KB
+        value: "1024"
+      - key: AVATAR_UPLOADS_PER_10_MIN
+        value: "10"
+
+      # --- Game timing ---
+      - key: TURN_SECONDS
+        value: "30"
+      - key: START_COUNTDOWN_SECONDS
+        value: "3"
+      - key: DISCONNECT_FORFEIT_SECONDS
+        value: "60"
+      - key: MOVE_GRACE_MS
+        value: "300"
+      - key: ROOM_IDLE_MINUTES
+        value: "15"
+
+      # --- Tournaments ---
+      - key: TOURNAMENT_READY_SECONDS
+        value: "30"
+      - key: TOURNAMENT_START_DELAY_SECONDS
+        value: "5"
+      - key: TOURNAMENT_NEXT_GAME_SECONDS
+        value: "6"
+      - key: TOURNAMENT_IDLE_MINUTES
+        value: "30"
+
+      # --- Voice chat TURN relay (Metered.ca) ---
+      # Blank = public STUN only, which fails between some networks (4G carrier NAT).
+      # METERED_DOMAIN is e.g. yourapp.metered.live; METERED_SECRET_KEY mints expiring
+      # credentials. Alternatives: METERED_API_KEY instead of the secret key, or a fixed
+      # login with TURN_USERNAME + TURN_CREDENTIAL (+ optional TURN_URLS).
+      - key: METERED_DOMAIN
+        sync: false
+      - key: METERED_SECRET_KEY
+        sync: false
+      - key: METERED_CREDENTIAL_HOURS
+        value: "6"
+
+  - type: web
+    name: caro-online
+    runtime: static
+    rootDir: client
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    # SPA fallback so deep links like /game/:roomId and /t/:id load the app.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+    # Vite inlines these at build time: after changing one, redeploy this site.
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Public URL of caro-online-server, e.g. https://caro-online-server.onrender.com
+      # (copy it from that service's page; Render may add a suffix if the name is taken).
+      - key: VITE_SOCKET_URL
+        sync: false
+      # Optional, not set here: VITE_API_URL (defaults to VITE_SOCKET_URL) and
+      # VITE_PUBLIC_URL (origin used in invite links; defaults to the page's own origin,
+      # set it when you add a custom domain). TURN is served by the server, so leave
+      # VITE_ICE_SERVERS unset: anything in it ships inside the public bundle.

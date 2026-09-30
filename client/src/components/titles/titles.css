@@ -1,0 +1,335 @@
+/*
+ * Title badges (TitleBadge.tsx). One stylesheet for every place a title shows:
+ * the rarity sets the palette, the effect adds motion, the size sets the scale.
+ *
+ * Structure: .title-badge (outer: glow, pulse halo in ::before)
+ *              └ .tb-face (pill: background, clipping, light sweep in ::after)
+ *                  ├ .tb-icon
+ *                  └ .tb-text (truncates)
+ *
+ * Titles with artwork (.tb-art, titleSkins.ts) skip the pill: see "Artwork".
+ *
+ * Only transform / opacity / background-position animate, all in CSS. Motion
+ * is gated by [data-motion]: "on" always, "hover" only while the badge or a
+ * .tb-hover-host ancestor is hovered / focused, "off" never; reduced motion
+ * turns all of it off and keeps the static colours.
+ */
+
+.title-badge {
+  --tb-h: 1.375rem;
+  --tb-fs: 11px;
+  --tb-px: 0.5rem;
+  --tb-gap: 0.25rem;
+  --tb-glow: transparent;
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 100%;
+  height: var(--tb-h);
+  border-radius: 9999px;
+  vertical-align: middle;
+  box-shadow: var(--tb-shadow, none);
+}
+.tb-face {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tb-gap);
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+  padding: 0 var(--tb-px);
+  border-radius: inherit;
+  overflow: hidden;
+  border: 1px solid var(--tb-border);
+  background-image: var(--tb-bg);
+  background-size: 220% 100%;
+  background-position: 0% 50%;
+  color: var(--tb-fg);
+  font-family: var(--font-display);
+  font-size: var(--tb-fs);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  text-shadow: var(--tb-text-shadow, none);
+  white-space: nowrap;
+}
+.tb-icon {
+  flex-shrink: 0;
+  font-size: 1.08em;
+  line-height: 1;
+  text-shadow: none;
+}
+.tb-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Room for descenders of Vietnamese diacritics without growing the pill. */
+  padding-block: 0.1em;
+}
+
+/* ─── Sizes ─────────────────────────────────────────────────────────────── */
+.tb-sm { --tb-h: 1.25rem; --tb-fs: 10.5px; --tb-px: 0.45rem; --tb-gap: 0.2rem; }
+.tb-md { --tb-h: 1.5rem; --tb-fs: 12px; --tb-px: 0.6rem; --tb-gap: 0.28rem; }
+.tb-lg { --tb-h: 2rem; --tb-fs: 15px; --tb-px: 0.85rem; --tb-gap: 0.35rem; }
+
+/* ─── Rarity palettes ───────────────────────────────────────────────────── */
+.tb-common {
+  --tb-bg: linear-gradient(135deg, #f8fafc, #e2e8f0, #f8fafc);
+  --tb-fg: #475569;
+  --tb-border: #cbd5e1;
+  --tb-glow: rgb(148 163 184 / 0.35);
+}
+.tb-rare {
+  --tb-bg: linear-gradient(135deg, #eff6ff, #dbeafe, #eff6ff);
+  --tb-fg: #1d4ed8;
+  --tb-border: #93c5fd;
+  --tb-glow: rgb(59 130 246 / 0.5);
+  --tb-shadow: 0 0 10px -3px var(--tb-glow);
+}
+.tb-epic {
+  --tb-bg: linear-gradient(110deg, #7c3aed, #c026d3, #db2777, #c026d3, #7c3aed);
+  --tb-fg: #fff;
+  --tb-border: rgb(255 255 255 / 0.28);
+  --tb-text-shadow: 0 1px 1px rgb(59 7 100 / 0.5);
+  --tb-glow: rgb(168 85 247 / 0.6);
+  --tb-shadow: 0 0 12px -3px var(--tb-glow);
+}
+.tb-legendary {
+  --tb-bg: linear-gradient(110deg, #f59e0b, #fde047, #fbbf24, #f97316, #f59e0b);
+  --tb-fg: #5a2a00;
+  --tb-border: rgb(255 255 255 / 0.6);
+  --tb-text-shadow: 0 1px 0 rgb(255 255 255 / 0.45);
+  --tb-glow: rgb(245 158 11 / 0.7);
+  --tb-shadow: 0 0 14px -3px var(--tb-glow);
+}
+.tb-secret {
+  --tb-bg: linear-gradient(110deg, #0f172a, #3b0764, #172554, #3b0764, #0f172a);
+  --tb-fg: #a5f3fc;
+  --tb-border: rgb(236 72 153 / 0.55);
+  --tb-text-shadow: 0 0 6px rgb(34 211 238 / 0.55);
+  --tb-glow: rgb(236 72 153 / 0.55);
+  --tb-shadow: 0 0 12px -3px var(--tb-glow);
+}
+
+/* Epic and legendary: a slow drift of the gradient. Legendary also gets the sweep. */
+.tb-epic .tb-face,
+.tb-legendary .tb-face,
+.tb-secret .tb-face {
+  animation: tb-pan 7s ease-in-out infinite alternate;
+}
+.tb-legendary .tb-face::after,
+.tb-fx-shimmer .tb-face::after,
+.tb-fx-lightning .tb-face::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgb(255 255 255 / 0.6) 50%, transparent 70%);
+  transform: translateX(-130%);
+  animation: tb-sweep 3.8s ease-in-out infinite;
+}
+
+/* ─── Effects ───────────────────────────────────────────────────────────── */
+.tb-fx-glow {
+  --tb-shadow: 0 0 12px -2px var(--tb-glow);
+}
+
+.tb-fx-gradient .tb-face {
+  animation: tb-pan 5s ease-in-out infinite alternate;
+}
+
+/* Fire: red → orange → yellow, drifting, with a warm flickering halo. */
+.tb-fx-fire {
+  --tb-bg: linear-gradient(110deg, #b91c1c, #ea580c, #f59e0b, #ea580c, #b91c1c);
+  --tb-fg: #fff;
+  --tb-border: rgb(254 215 170 / 0.6);
+  --tb-text-shadow: 0 1px 1.5px rgb(127 29 29 / 0.75);
+  --tb-glow: rgb(249 115 22 / 0.75);
+  --tb-shadow: 0 0 12px -3px var(--tb-glow);
+}
+.tb-fx-fire .tb-face {
+  animation: tb-pan 3.2s ease-in-out infinite alternate;
+}
+
+/* Lightning: an electric palette and a fast streak now and then. */
+.tb-fx-lightning {
+  --tb-bg: linear-gradient(110deg, #4338ca, #7c3aed, #0284c7, #7c3aed, #4338ca);
+  --tb-glow: rgb(56 189 248 / 0.6);
+}
+.tb-fx-lightning .tb-face::after {
+  background: linear-gradient(100deg, transparent 40%, rgb(224 242 254 / 0.95) 50%, transparent 60%);
+  animation: tb-strike 3.4s linear infinite;
+}
+
+/* Shield: steady blue-teal with a very slow pulse of the halo. */
+.tb-fx-shield {
+  --tb-bg: linear-gradient(110deg, #0369a1, #0284c7, #0d9488, #0284c7, #0369a1);
+  --tb-fg: #fff;
+  --tb-border: rgb(186 230 253 / 0.6);
+  --tb-text-shadow: 0 1px 1px rgb(8 47 73 / 0.6);
+  --tb-glow: rgb(14 165 233 / 0.65);
+}
+
+/* The pulsing / flickering halo (fire, shield): opacity only. */
+.tb-fx-fire::before,
+.tb-fx-shield::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  box-shadow: 0 0 10px 1px var(--tb-glow);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.tb-fx-fire::before {
+  animation: tb-flicker 2.6s ease-in-out infinite;
+}
+.tb-fx-shield::before {
+  animation: tb-pulse 3.4s ease-in-out infinite;
+}
+
+/* Glitch: still most of the time, a split-second RGB jolt every few seconds. */
+.tb-fx-glitch .tb-text,
+.tb-fx-glitch .tb-icon {
+  animation: tb-glitch 5.5s steps(1, end) infinite;
+}
+
+/* ─── Keyframes ─────────────────────────────────────────────────────────── */
+@keyframes tb-pan {
+  from { background-position: 0% 50%; }
+  to { background-position: 100% 50%; }
+}
+@keyframes tb-sweep {
+  0%, 55% { transform: translateX(-130%); }
+  100% { transform: translateX(130%); }
+}
+@keyframes tb-strike {
+  0%, 80% { transform: translateX(-130%); }
+  92%, 100% { transform: translateX(130%); }
+}
+@keyframes tb-flicker {
+  0%, 100% { opacity: 0.5; }
+  25% { opacity: 0.85; }
+  40% { opacity: 0.6; }
+  65% { opacity: 0.95; }
+  80% { opacity: 0.65; }
+}
+@keyframes tb-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.8; }
+}
+@keyframes tb-glitch {
+  0%, 90%, 97%, 100% { transform: none; }
+  91% { transform: translateX(1px); text-shadow: -1px 0 #f43f5e, 1px 0 #22d3ee; }
+  93% { transform: translateX(-1px); text-shadow: 1px 0 #f43f5e, -1px 0 #22d3ee; }
+  95% { transform: translateY(-0.5px); text-shadow: -1px 0 #22d3ee, 1px 0 #f43f5e; }
+}
+
+/* ─── Artwork ─────────────────────────────────────────────────────────────
+ * .tb-art (box at the canvas aspect ratio)
+ *   ├ .tb-art-base     static plate
+ *   ├ .tb-art-overlay  animated WebP, same canvas: the only motion
+ *   └ .tb-art-text     the name, in the safe zone, above both
+ * The plate is wider than the pill, so its sizes are its own. Its width
+ * follows the height but may shrink (max-width), keeping the ratio.
+ */
+.tb-art {
+  --tb-art-h: 2.5rem;
+  --tb-art-fg: #4a2300;
+  height: auto;
+  width: calc(var(--tb-art-h) * var(--tb-aspect, 4));
+  aspect-ratio: var(--tb-aspect, 4);
+  flex-shrink: 0;
+  border-radius: 0;
+  box-shadow: none;
+  user-select: none;
+}
+.tb-art.tb-sm { --tb-art-h: 2.5rem; }
+.tb-art.tb-md { --tb-art-h: 3rem; }
+.tb-art.tb-lg { --tb-art-h: 4.5rem; }
+.tb-art-base,
+.tb-art-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+}
+.tb-art-overlay {
+  z-index: 1;
+}
+.tb-art-text {
+  position: absolute;
+  z-index: 2;
+  left: var(--tb-zx);
+  top: var(--tb-zy);
+  width: var(--tb-zw);
+  height: var(--tb-zh);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Clip sideways only: Vietnamese marks may rise above the line box. */
+  overflow-x: clip;
+  overflow-y: visible;
+  padding: 0 2%;
+  color: var(--tb-art-fg);
+  font-family: var(--font-display);
+  font-weight: 800;
+  line-height: 1.1;
+  text-align: center;
+  text-shadow: var(--tb-art-shadow, 0 1px 0 rgb(255 255 255 / 0.55));
+  white-space: nowrap;
+}
+.tb-art-text[data-wrap='1'] {
+  white-space: normal;
+  text-wrap: balance;
+}
+
+/* ─── States ────────────────────────────────────────────────────────────── */
+
+/* Not owned yet: drained, still readable. */
+.tb-locked {
+  filter: saturate(0.3);
+  opacity: 0.8;
+  --tb-shadow: none;
+}
+
+/* Motion gating. The artwork moves only through its overlay, so it is left out when still. */
+.title-badge[data-motion='off'] .tb-art-overlay,
+.title-badge[data-motion='hover']:not(:hover):not(.tb-hover-host:hover .title-badge):not(.tb-hover-host:focus-within .title-badge) .tb-art-overlay {
+  display: none;
+}
+
+/* The parts that animate: */
+.title-badge[data-motion='off']::before,
+.title-badge[data-motion='off'] .tb-face,
+.title-badge[data-motion='off'] .tb-face::after,
+.title-badge[data-motion='off'] .tb-text,
+.title-badge[data-motion='off'] .tb-icon,
+.title-badge[data-motion='hover']:not(:hover):not(.tb-hover-host:hover .title-badge):not(.tb-hover-host:focus-within .title-badge)::before,
+.title-badge[data-motion='hover']:not(:hover):not(.tb-hover-host:hover .title-badge):not(.tb-hover-host:focus-within .title-badge) .tb-face,
+.title-badge[data-motion='hover']:not(:hover):not(.tb-hover-host:hover .title-badge):not(.tb-hover-host:focus-within .title-badge) .tb-face::after,
+.title-badge[data-motion='hover']:not(:hover):not(.tb-hover-host:hover .title-badge):not(.tb-hover-host:focus-within .title-badge) .tb-text,
+.title-badge[data-motion='hover']:not(:hover):not(.tb-hover-host:hover .title-badge):not(.tb-hover-host:focus-within .title-badge) .tb-icon {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .title-badge::before,
+  .title-badge .tb-face,
+  .title-badge .tb-face::after,
+  .title-badge .tb-text,
+  .title-badge .tb-icon {
+    animation: none !important;
+  }
+  .title-badge .tb-art-overlay {
+    display: none;
+  }
+}

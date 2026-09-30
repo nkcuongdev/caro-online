@@ -1,0 +1,79 @@
+{
+  "id": "mat-dai-bang",
+  "title": "Mắt Đại Bàng",
+  "rarity": "epic",
+  "effect": "shimmer",
+  "theme": [
+    "vision",
+    "awareness",
+    "tactical-sight"
+  ],
+  "assets": {
+    "base": "title_mat-dai-bang_base.png",
+    "overlay": "title_mat-dai-bang_overlay.webp"
+  },
+  "canvas": {
+    "width": 1024,
+    "height": 256,
+    "aspectRatio": "4:1",
+    "background": "transparent"
+  },
+  "overlay": {
+    "format": "animated-webp",
+    "width": 1024,
+    "height": 256,
+    "frameCount": 30,
+    "frameDurationMs": 100,
+    "durationMs": 3000,
+    "fps": 10,
+    "loop": true,
+    "seamlessLoop": true,
+    "alpha": true,
+    "alignment": "pixel-matched-to-base",
+    "blendMode": "normal",
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "effects": [
+      "pupil-glow-pulse",
+      "subtle-eye-scan-shimmer",
+      "small-crystal-twinkle",
+      "subtle-vision-rays"
+    ],
+    "textSafeArea": {
+      "x": 372,
+      "y": 98,
+      "width": 440,
+      "height": 56,
+      "overlayBlocked": true
+    }
+  },
+  "runtime": {
+    "recommendedTrigger": "hover-or-featured",
+    "preload": "metadata",
+    "decode": "async",
+    "pointerEvents": "none",
+    "ariaHidden": true,
+    "objectFit": "fill",
+    "sameCanvasAsBase": true
+  },
+  "reducedMotion": {
+    "enabled": true,
+    "behavior": "hide-overlay",
+    "fallback": "title_mat-dai-bang_base.png",
+    "cssMediaQuery": "(prefers-reduced-motion: reduce)",
+    "notes": "Render the static base only; do not freeze on an arbitrary animated overlay frame."
+  },
+  "design": {
+    "emblem": "stylized-eagle-eye-only",
+    "palette": [
+      "purple",
+      "cyan",
+      "silver-metallic"
+    ],
+    "notes": "No text or watermark. Overlay is effects-only and derived from the exact base canvas so it does not replace or shift the emblem/frame."
+  },
+  "textColor": "#2e1065",
+  "textShadow": "0 0 2px #fff, 0 0 4px #fff, 0 1px 0 rgb(255 255 255 / 0.9)"
+}

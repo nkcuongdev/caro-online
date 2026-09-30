@@ -1,0 +1,39 @@
+{
+  "id": "vo-dich",
+  "rarity": "legendary",
+  "effect": "shimmer",
+  "files": {
+    "base": "title_vo-dich_base.png",
+    "overlay": "title_vo-dich_overlay.webp"
+  },
+  "dimensions": {
+    "width": 1024,
+    "height": 256
+  },
+  "animation": {
+    "fps": 30,
+    "duration": 3,
+    "loop": true
+  },
+  "textSafeArea": {
+    "x": 355,
+    "y": 106,
+    "width": 440,
+    "height": 56
+  },
+  "overlayPlacement": {
+    "x": 0,
+    "y": 0,
+    "width": 1024,
+    "height": 256,
+    "anchor": "top-left",
+    "blendMode": "screen",
+    "pointerEvents": "none"
+  },
+  "reducedMotion": {
+    "enabled": true,
+    "mode": "static-frame",
+    "frame": 0,
+    "fallback": "title_vo-dich_base.png"
+  }
+}

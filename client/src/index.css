@@ -1,0 +1,490 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-display: 'Baloo 2', ui-rounded, 'Segoe UI', system-ui, sans-serif;
+  --font-sans: 'Nunito', ui-sans-serif, 'Segoe UI', system-ui, sans-serif;
+
+  /* Primary: fresh blue */
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+
+  /* X: coral */
+  --color-coral-50: #fff5f2;
+  --color-coral-100: #ffe6df;
+  --color-coral-200: #ffcbbd;
+  --color-coral-300: #ffa892;
+  --color-coral-400: #ff8a70;
+  --color-coral-500: #f96b4f;
+  --color-coral-600: #e2523a;
+  --color-coral-700: #bc3f2b;
+
+  /* Board surface */
+  --color-paper: #fffdf8;
+  --color-ink: #1e293b;
+
+  /* Achievement rarity (components/achievements/rarity.ts maps these to styles) */
+  --color-rarity-common: #94a3b8;
+  --color-rarity-rare: #3b82f6;
+  --color-rarity-epic: #8b5cf6;
+  --color-rarity-legendary: #f59e0b;
+  --color-rarity-secret: #d946ef;
+
+  --shadow-soft: 0 1px 2px rgb(15 23 42 / 0.04), 0 8px 24px -8px rgb(15 23 42 / 0.1);
+  --shadow-lift: 0 2px 4px rgb(15 23 42 / 0.04), 0 18px 40px -12px rgb(37 99 235 / 0.22);
+
+  --animate-pop-in: pop-in 260ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  --animate-fade-up: fade-up 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-fade-in: fade-in 240ms ease-out both;
+  --animate-float: float 3.2s ease-in-out infinite;
+  --animate-breathe: breathe 2.4s ease-in-out infinite;
+  --animate-pulse-soft: pulse-soft 1s ease-in-out infinite;
+  --animate-pulse-strong: pulse-strong 0.5s ease-in-out infinite;
+  --animate-count-pop: count-pop 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-win-cell: win-cell 900ms ease-in-out infinite alternate;
+  --animate-shake: shake 360ms ease-in-out;
+  --animate-bounce-dot: bounce-dot 1.2s ease-in-out infinite;
+  --animate-ping-soft: ping-soft 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
+  --animate-reaction: reaction-pop 2000ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-sheet-up: sheet-up 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  --animate-speaking: speaking 1.1s ease-in-out infinite;
+  --animate-cooldown: cooldown 1500ms linear both;
+}
+
+/* Reaction bubble: pops in, floats a little, then fades out (~2s total). */
+@keyframes reaction-pop {
+  0% { transform: translateY(8px) scale(0.3) rotate(-12deg); opacity: 0; }
+  12% { transform: translateY(0) scale(1.25) rotate(6deg); opacity: 1; }
+  22% { transform: translateY(0) scale(1) rotate(0); opacity: 1; }
+  78% { transform: translateY(-6px) scale(1); opacity: 1; }
+  100% { transform: translateY(-16px) scale(0.85); opacity: 0; }
+}
+@keyframes sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes speaking {
+  0%, 100% { box-shadow: 0 0 0 3px rgb(52 211 153 / 0.9), 0 0 0 6px rgb(52 211 153 / 0.25); }
+  50% { box-shadow: 0 0 0 3px rgb(52 211 153 / 0.9), 0 0 0 10px rgb(52 211 153 / 0); }
+}
+@keyframes cooldown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+@keyframes pop-in {
+  0% { transform: scale(0.35); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes fade-up {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-8px) rotate(2deg); }
+}
+@keyframes breathe {
+  0%, 100% { transform: translateY(0); box-shadow: var(--shadow-lift); }
+  50% { transform: translateY(-2px); box-shadow: 0 2px 4px rgb(15 23 42 / 0.04), 0 22px 44px -14px rgb(37 99 235 / 0.3); }
+}
+@keyframes pulse-soft {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+}
+@keyframes pulse-strong {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgb(239 68 68 / 0.35); }
+  50% { transform: scale(1.09); box-shadow: 0 0 0 6px rgb(239 68 68 / 0); }
+}
+@keyframes count-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  25% { transform: scale(1.12); opacity: 1; }
+  55% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0.94); opacity: 0.8; }
+}
+@keyframes win-cell {
+  from { background-color: rgb(209 250 229); }
+  to { background-color: rgb(167 243 208); }
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+@keyframes bounce-dot {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.45; }
+  40% { transform: translateY(-6px); opacity: 1; }
+}
+@keyframes ping-soft {
+  0% { transform: scale(1); opacity: 0.55; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+@keyframes draw-stroke {
+  from { stroke-dashoffset: var(--len, 40); }
+  to { stroke-dashoffset: 0; }
+}
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background-color: #f3f8ff;
+  background-image:
+    radial-gradient(900px 600px at 0% 0%, rgb(219 234 254 / 0.9), transparent 60%),
+    radial-gradient(800px 600px at 100% 0%, rgb(209 250 229 / 0.75), transparent 60%),
+    radial-gradient(900px 700px at 60% 100%, rgb(237 233 254 / 0.8), transparent 60%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overflow-x: hidden;
+}
+
+/* Drawn-on pieces: stroke animates from nothing to full. */
+.piece-draw path,
+.piece-draw circle {
+  stroke-dasharray: var(--len, 40);
+  animation: draw-stroke 280ms cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+.piece-draw path:nth-child(2) {
+  animation-delay: 110ms;
+}
+
+.board-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(148 163 184 / 0.5) transparent;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+  /* The bubble's animation ends invisible; show it statically instead (JS removes it after 2s). */
+  .reaction-bubble {
+    animation: none !important;
+  }
+}
+
+/* Caro stickers (components/comms/CaroSticker.tsx): the character moves, the label stays put. */
+[class^='caro-sticker-'] {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.caro-sticker-bounce { animation: sticker-bounce 1.1s cubic-bezier(0.34, 1.56, 0.64, 1) infinite; }
+.caro-sticker-pop { animation: sticker-pop 1.4s ease-in-out infinite; transform-origin: 50% 50%; }
+.caro-sticker-shake { animation: sticker-shake 0.9s ease-in-out infinite; transform-origin: 50% 50%; }
+.caro-sticker-wiggle { animation: sticker-wiggle 1.3s ease-in-out infinite; }
+.caro-sticker-float { animation: sticker-float 2s ease-in-out infinite; }
+.caro-sticker-droop { animation: sticker-droop 2.4s ease-in-out infinite; }
+@keyframes sticker-bounce {
+  0%, 100% { transform: translateY(0) scale(1, 1); }
+  30% { transform: translateY(-9px) scale(0.96, 1.05); }
+  55% { transform: translateY(0) scale(1.06, 0.94); }
+  70% { transform: translateY(0) scale(1, 1); }
+}
+@keyframes sticker-pop {
+  0%, 100% { transform: scale(1); }
+  40% { transform: scale(1.12) rotate(-4deg); }
+  60% { transform: scale(0.97) rotate(3deg); }
+}
+@keyframes sticker-shake {
+  0%, 100% { transform: translateX(0) rotate(0); }
+  20% { transform: translateX(-3px) rotate(-5deg); }
+  40% { transform: translateX(3px) rotate(5deg); }
+  60% { transform: translateX(-2px) rotate(-3deg); }
+  80% { transform: translateX(2px) rotate(2deg); }
+}
+@keyframes sticker-wiggle {
+  0%, 100% { transform: rotate(0); }
+  25% { transform: rotate(-7deg); }
+  75% { transform: rotate(7deg); }
+}
+@keyframes sticker-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+@keyframes sticker-droop {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  50% { transform: translateY(3px) rotate(-4deg); }
+}
+
+/* Stands "hype" (components/comms/HypeLayer.tsx): rises, sways, fades. */
+.hype-item {
+  animation: hype-rise 2.6s cubic-bezier(0.22, 1, 0.36, 1) both;
+  translate: -50% 0;
+}
+@keyframes hype-rise {
+  0% { transform: translateY(20px) scale(0.4); opacity: 0; }
+  12% { transform: translateY(0) scale(1.15); opacity: 1; }
+  40% { transform: translate(-10px, -90px) scale(1); opacity: 1; }
+  70% { transform: translate(8px, -170px) scale(0.95); opacity: 0.9; }
+  100% { transform: translate(-4px, -250px) scale(0.85); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hype-item {
+    animation: none !important;
+  }
+}
+
+/* ─── Tournament (pages/TournamentPage.tsx, components/tournament/*) ─────── */
+
+/* Hero banner: soft confetti dots over the gradient. A pseudo-element, so the
+   element's own Tailwind gradient (also a background-image) is kept. Needs a
+   positioned host (`relative`). */
+.t-hero-dots::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 12% 30%, rgb(255 255 255 / 0.35) 0 3px, transparent 4px),
+    radial-gradient(circle at 78% 18%, rgb(255 255 255 / 0.3) 0 4px, transparent 5px),
+    radial-gradient(circle at 88% 72%, rgb(253 224 71 / 0.55) 0 3px, transparent 4px),
+    radial-gradient(circle at 32% 82%, rgb(255 255 255 / 0.25) 0 5px, transparent 6px),
+    radial-gradient(circle at 55% 12%, rgb(253 224 71 / 0.5) 0 2px, transparent 3px),
+    radial-gradient(circle at 62% 60%, rgb(255 255 255 / 0.2) 0 2px, transparent 3px);
+}
+
+/* A player sliding into their next-round slot. */
+.t-advance-in {
+  animation: t-advance-in 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes t-advance-in {
+  0% { transform: translateX(-28px) scale(0.92); opacity: 0; box-shadow: 0 0 0 0 rgb(251 191 36 / 0); }
+  45% { transform: translateX(3px) scale(1.03); opacity: 1; box-shadow: 0 0 0 4px rgb(251 191 36 / 0.55); }
+  100% { transform: translateX(0) scale(1); opacity: 1; box-shadow: 0 0 0 0 rgb(251 191 36 / 0); }
+}
+
+/* Bracket connector filling left → right when a winner moves on. */
+.t-connector-fill {
+  transform-origin: left center;
+  animation: t-grow-x 600ms cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+.t-connector-fill-y {
+  animation: t-grow-y 500ms 250ms cubic-bezier(0.65, 0, 0.35, 1) both;
+}
+@keyframes t-grow-x {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+@keyframes t-grow-y {
+  from { transform: scaleY(0); }
+  to { transform: scaleY(1); }
+}
+
+/* LIVE match: a slowly spinning gradient ring. */
+.t-live-ring {
+  position: relative;
+  isolation: isolate;
+}
+.t-live-ring::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+  background: conic-gradient(from var(--t-angle, 0deg), #fb7185, #f59e0b, #3b82f6, #a78bfa, #fb7185);
+  animation: t-spin 3.2s linear infinite;
+}
+@property --t-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes t-spin {
+  to { --t-angle: 360deg; }
+}
+
+/* Light sweep across gold surfaces. */
+.t-shine {
+  position: relative;
+  overflow: hidden;
+}
+.t-shine::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 0.55) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: t-shine 3.4s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes t-shine {
+  0%, 55% { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+
+/* Champion: rotating rays behind the trophy. */
+.t-rays {
+  background: repeating-conic-gradient(from 0deg, rgb(251 191 36 / 0.28) 0deg 10deg, transparent 10deg 24deg);
+  mask-image: radial-gradient(circle, black 20%, transparent 68%);
+  animation: t-rays 18s linear infinite;
+}
+@keyframes t-rays {
+  to { transform: rotate(360deg); }
+}
+
+.t-rise {
+  animation: t-rise 700ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes t-rise {
+  0% { transform: translateY(40px) scale(0.6); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.t-bob {
+  animation: t-bob 2.8s ease-in-out infinite;
+}
+@keyframes t-bob {
+  0%, 100% { transform: translateY(0) rotate(-3deg); }
+  50% { transform: translateY(-7px) rotate(3deg); }
+}
+
+/* "VS" slam in the ready check. */
+.t-slam {
+  animation: t-slam 560ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+@keyframes t-slam {
+  0% { transform: scale(2.6) rotate(-12deg); opacity: 0; }
+  60% { transform: scale(0.9) rotate(4deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+.t-slide-l {
+  animation: t-slide-l 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.t-slide-r {
+  animation: t-slide-r 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes t-slide-l {
+  from { transform: translateX(-60px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes t-slide-r {
+  from { transform: translateX(60px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+/* Empty lobby seat, gently waiting. */
+.t-seat-wait {
+  animation: t-seat-wait 2.2s ease-in-out infinite;
+}
+@keyframes t-seat-wait {
+  0%, 100% { border-color: rgb(203 213 225); }
+  50% { border-color: rgb(147 197 253); }
+}
+
+.t-bracket-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(148 163 184 / 0.5) transparent;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Live stands comments for players (components/comms/CommentTicker.tsx). */
+.ticker-item {
+  animation: ticker-life 6s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes ticker-life {
+  0% { transform: translateX(-24px); opacity: 0; }
+  6% { transform: translateX(0); opacity: 1; }
+  85% { transform: translateX(0); opacity: 1; }
+  100% { transform: translateY(-6px); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker-item {
+    animation: none !important;
+  }
+}
+
+/* ─── Achievements (components/achievements/*) ────────────────────────────── */
+
+/* Unlock popup: drops in from the top, leaves upwards. */
+.ach-popup-in {
+  animation: ach-popup-in 520ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+.ach-popup-out {
+  animation: ach-popup-out 220ms ease-in both;
+}
+@keyframes ach-popup-in {
+  0% { transform: translateY(-24px) scale(0.86); opacity: 0; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes ach-popup-out {
+  to { transform: translateY(-16px) scale(0.96); opacity: 0; }
+}
+
+/* Soft halo behind an icon, tinted by --ach-glow. Only opacity/transform
+   animate, so it stays on the compositor. Needs a positioned host. */
+.ach-halo::before {
+  content: '';
+  position: absolute;
+  inset: -35%;
+  border-radius: 9999px;
+  background: radial-gradient(closest-side, var(--ach-glow, transparent), transparent);
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: -1;
+}
+.ach-halo-pulse::before {
+  animation: ach-halo 1.8s ease-in-out infinite;
+}
+@keyframes ach-halo {
+  0%, 100% { opacity: 0.35; transform: scale(0.9); }
+  50% { opacity: 0.8; transform: scale(1.08); }
+}
+
+/* One light sweep across a freshly unlocked card. */
+.ach-shine::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, rgb(255 255 255 / 0.7) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: ach-shine 1100ms 350ms ease-out both;
+}
+@keyframes ach-shine {
+  to { transform: translateX(120%); }
+}
+
+/* Auto-close countdown under the popup. */
+.ach-countdown {
+  transform-origin: left center;
+  animation: cooldown var(--ach-duration, 5000ms) linear both;
+}
+.ach-paused .ach-countdown {
+  animation-play-state: paused;
+}
+
+/* Locked achievement art: drained, still recognisable. */
+.ach-locked-art {
+  filter: grayscale(1) opacity(0.45);
+}

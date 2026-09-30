@@ -1,0 +1,189 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "server",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "server",
+        "run",
+        "dev"
+      ],
+      "port": 4000
+    },
+    {
+      "name": "client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "client",
+        "run",
+        "dev"
+      ],
+      "port": 5173
+    },
+    {
+      "name": "server-alt",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set PORT=4100&& npm --prefix server run dev"
+      ],
+      "port": 4100
+    },
+    {
+      "name": "client-alt",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4100&& npm --prefix client run dev -- --port 5273 --strictPort"
+      ],
+      "port": 5273
+    },
+    {
+      "name": "server-alt2",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set PORT=4200&& npm --prefix server run dev"
+      ],
+      "port": 4200
+    },
+    {
+      "name": "client-alt2",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4200&& npm --prefix client run dev -- --port 5373 --strictPort"
+      ],
+      "port": 5373
+    },
+    {
+      "name": "client-alt3",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4000&& npm --prefix client run dev -- --port 5473 --strictPort"
+      ],
+      "port": 5473
+    },
+    {
+      "name": "server-alt4",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set PORT=4400&& npm --prefix server run dev"
+      ],
+      "port": 4400
+    },
+    {
+      "name": "client-alt4",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4400&& npm --prefix client run dev -- --port 5573 --strictPort"
+      ],
+      "port": 5573
+    },
+    {
+      "name": "server-nowatch",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd server&& set PORT=4500&& node --import tsx src/index.ts"
+      ],
+      "port": 4500
+    },
+    {
+      "name": "client-nowatch",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4500&& npm --prefix client run dev -- --port 5673 --strictPort"
+      ],
+      "port": 5673
+    },
+    {
+      "name": "server-auth",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set PORT=4600&& set DATABASE_PATH=data/dev-auth.db&& npm --prefix server run dev"
+      ],
+      "port": 4600
+    },
+    {
+      "name": "client-auth",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4600&& npm --prefix client run dev -- --port 5773 --strictPort"
+      ],
+      "port": 5773
+    },
+    {
+      "name": "server-titles",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd server&& set PORT=4700&& set DATABASE_PATH=data/titles-verify.db&& node --import tsx src/index.ts"
+      ],
+      "port": 4700
+    },
+    {
+      "name": "client-titles",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4700&& npm --prefix client run dev -- --port 5873 --strictPort"
+      ],
+      "port": 5873
+    },
+    {
+      "name": "titles-stack",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd server&& set PORT=4700&& set DATABASE_PATH=data/titles-verify.db&& start /b node --import tsx src/index.ts&& cd ..&& set DEV_SERVER_URL=http://localhost:4700&& npm --prefix client run dev -- --port 5873 --strictPort"
+      ],
+      "port": 5873
+    },
+    {
+      "name": "server-frames",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd server&& set PORT=4800&& set DATABASE_PATH=data/frames-verify.db&& node --import tsx src/index.ts"
+      ],
+      "port": 4800
+    },
+    {
+      "name": "client-frames",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4800&& npm --prefix client run dev -- --port 5973 --strictPort"
+      ],
+      "port": 5973
+    },
+    {
+      "name": "server-voice",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd server&& set PORT=4900&& set TURN_USERNAME=dummy-user&& set TURN_CREDENTIAL=dummy-pass&& node --import tsx src/index.ts"
+      ],
+      "port": 4900
+    },
+    {
+      "name": "client-voice",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set DEV_SERVER_URL=http://localhost:4900&& npm --prefix client run dev -- --port 6073 --strictPort"
+      ],
+      "port": 6073
+    }
+  ]
+}

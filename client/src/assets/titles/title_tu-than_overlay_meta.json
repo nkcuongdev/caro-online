@@ -1,0 +1,29 @@
+{
+  "id": "tu-than",
+  "baseFile": "title_tu-than_base.png",
+  "overlayFile": "title_tu-than_overlay.webp",
+  "width": 1024,
+  "height": 256,
+  "aspectRatio": "4:1",
+  "loop": true,
+  "fps": 10,
+  "durationMs": 4000,
+  "textSafeArea": {
+    "x": 385,
+    "y": 102,
+    "width": 400,
+    "height": 56
+  },
+  "overlayPlacement": {
+    "x": 0,
+    "y": 0,
+    "width": 1024,
+    "height": 256,
+    "fit": "fill",
+    "pointerEvents": "none"
+  },
+  "reducedMotion": "base only",
+  "effect": "glitch",
+  "textColor": "#fde8ec",
+  "textShadow": "0 0 1px #000, 0 1px 2px rgb(0 0 0 / 0.9), 0 0 6px rgb(239 68 68 / 0.55)"
+}

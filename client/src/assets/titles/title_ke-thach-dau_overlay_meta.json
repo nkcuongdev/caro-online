@@ -1,0 +1,49 @@
+{
+  "id": "ke-thach-dau",
+  "rarity": "rare",
+  "effect": "glow",
+  "theme": [
+    "Challenge",
+    "Rivalry",
+    "PvP"
+  ],
+  "files": {
+    "base": "title_ke-thach-dau_base.png",
+    "overlay": "title_ke-thach-dau_overlay.webp",
+    "meta": "title_ke-thach-dau_overlay_meta.json"
+  },
+  "size": {
+    "width": 1024,
+    "height": 256
+  },
+  "fps": 20,
+  "duration": 3,
+  "loop": true,
+  "textSafeArea": {
+    "x": 372,
+    "y": 100,
+    "width": 440,
+    "height": 56
+  },
+  "overlayPlacement": {
+    "x": 0,
+    "y": 0,
+    "width": 1024,
+    "height": 256,
+    "objectFit": "fill",
+    "pixelAlignedToBase": true
+  },
+  "reducedMotion": {
+    "enabled": true,
+    "fallback": "base-only",
+    "baseFile": "title_ke-thach-dau_base.png",
+    "disableOverlayAnimation": true
+  },
+  "notes": [
+    "Overlay is generated directly from the final base geometry so placement is pixel-aligned.",
+    "Glow is concentrated on cyan/bright edges; central text-safe area is kept clear.",
+    "Animation uses subtle edge glow pulse, localized sword-clash sparks, and a short shimmer."
+  ],
+  "textColor": "#eef6ff",
+  "textShadow": "0 0 1px #0b1f4d, 0 1px 2px rgb(3 15 45 / 0.95), 0 0 6px rgb(56 189 248 / 0.55)"
+}

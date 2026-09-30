@@ -1,0 +1,29 @@
+{
+  "id": "huyen-thoai",
+  "canvas": {
+    "width": 1024,
+    "height": 256
+  },
+  "frame_count": 24,
+  "fps": 12,
+  "loop_duration_seconds": 2,
+  "loop": "infinite",
+  "text_safe_zone": {
+    "x": 425,
+    "y": 88,
+    "width": 420,
+    "height": 90
+  },
+  "effects": [
+    "golden glow pulse",
+    "shimmer sweep",
+    "gem pulse",
+    "sparse twinkles"
+  ],
+  "spritesheet": {
+    "columns": 6,
+    "rows": 4,
+    "frame_width": 1024,
+    "frame_height": 256
+  }
+}
